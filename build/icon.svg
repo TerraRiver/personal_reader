@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- macOS icon grid: 824px rounded square inset 100px, soft shadow beneath. -->
+  <defs>
+    <filter id="sh" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000" flood-opacity="0.28"/>
+    </filter>
+    <clipPath id="sq"><rect x="100" y="100" width="824" height="824" rx="186"/></clipPath>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="#ffffff" filter="url(#sh)"/>
+  <g clip-path="url(#sq)">
+    <!-- notes column -->
+    <rect x="100" y="100" width="330" height="824" fill="#0a0a0a"/>
+    <rect x="172" y="252" width="188" height="34" fill="#ffffff"/>
+    <rect x="172" y="324" width="132" height="34" fill="#ffffff"/>
+    <rect x="172" y="396" width="164" height="34" fill="#ffffff"/>
+    <!-- pdf page -->
+    <rect x="500" y="252" width="292" height="34" fill="#0a0a0a"/>
+    <rect x="500" y="324" width="244" height="34" fill="#0a0a0a"/>
+    <rect x="500" y="396" width="292" height="34" fill="#0a0a0a"/>
+    <!-- the cut -->
+    <rect x="430" y="512" width="494" height="52" fill="#e4002b"/>
+    <rect x="500" y="636" width="292" height="34" fill="#0a0a0a"/>
+    <rect x="500" y="708" width="200" height="34" fill="#0a0a0a"/>
+  </g>
+</svg>

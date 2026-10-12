@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Notebook } from '../types';
+import { isMod, shortcut } from '../platform';
 import {
   type NoteView,
   canStart,
@@ -45,10 +46,10 @@ export default function NotesPanel(props: Props) {
   const startable = canStart(views, currentPage);
   const target = cutTarget(views, currentPage, activeId);
 
-  // ⌘E toggles source / preview.
+  // ⌘E / Ctrl+E toggles source / preview.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey && e.key.toLowerCase() === 'e') {
+      if (isMod(e) && e.key.toLowerCase() === 'e') {
         e.preventDefault();
         setMode((m) => (m === 'source' ? 'preview' : 'source'));
       }
@@ -88,7 +89,7 @@ export default function NotesPanel(props: Props) {
             <span className="toggle-box" />
             跟随翻页
           </label>
-          <div className="segmented" title="⌘E">
+          <div className="segmented" title={shortcut('E')}>
             <button className={mode === 'source' ? 'active' : ''} onClick={() => setMode('source')}>
               源码
             </button>

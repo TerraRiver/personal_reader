@@ -1,6 +1,6 @@
 # 阅读器
 
-极简瑞士风的 macOS PDF 阅读器，左侧 Markdown 笔记，右侧 PDF。
+极简瑞士风的 PDF 阅读器（macOS / Windows），左侧 Markdown 笔记，右侧 PDF。
 
 技术栈：Electron + React + Vite + TypeScript，PDF 渲染用 pdf.js，Markdown 用 react-markdown + GFM。
 
@@ -10,9 +10,12 @@
 
 ```bash
 npm install
-npm run dev     # 开发模式（Vite 热更新 + Electron）
-npm run dist    # 打包为 .dmg（Apple Silicon），输出到 release/
+npm run dev       # 开发模式（Vite 热更新 + Electron）
+npm run dist      # 打包为 .dmg（Apple Silicon），输出到 release/
+npm run dist:win  # 打包为 Windows 安装程序 .exe（x64），输出到 release/
 ```
+
+在 Apple 芯片的 Mac 上打 Windows 包需要先装 Rosetta（`softwareupdate --install-rosetta --agree-to-license`），因为 electron-builder 自带的 makensis 是 x86_64 程序。exe 未签名，首次运行时 SmartScreen 会提示，选「仍要运行」即可。
 
 ## 笔记怎么用
 
@@ -33,10 +36,12 @@ npm run dist    # 打包为 .dmg（Apple Silicon），输出到 release/
 ## 书签与文字层
 
 - 书库列表显示每本书的文字状态（原生文字 / 已 OCR / 未 OCR）和书签数量，导入后自动检测。
-- 阅读器中点「书签」（⌘B）打开书签栏：点击跳转，可添加、重命名、改页码、调整层级、删除或清空。
+- 阅读器中点「书签」（⌘B / Ctrl+B）打开书签栏：点击跳转，可添加、重命名、改页码、调整层级、删除或清空。
 - 首次打开时导入 PDF 自带书签；之后的编辑保存在应用里，不改动 PDF 文件。
 
 ## 快捷键
+
+Windows 上把 ⌘ 换成 Ctrl。
 
 | 按键 | 作用 |
 |---|---|
@@ -49,7 +54,10 @@ npm run dist    # 打包为 .dmg（Apple Silicon），输出到 release/
 
 ## 数据位置
 
-`~/Library/Application Support/Reader/library/`
+- macOS：`~/Library/Application Support/Reader/library/`
+- Windows：`%APPDATA%\Reader\library\`
+
+目录内容：
 
 - `library.json` — 书目、页数、阅读进度
 - `books/<id>.pdf` — 导入时复制进来的 PDF

@@ -4,13 +4,15 @@
   "version": "0.1.0",
   "private": true,
   "description": "A minimal PDF reader with page-bound markdown notes",
+  "author": "TerraRiver",
   "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n vite,electron \"vite\" \"wait-on tcp:5173 && electron .\"",
     "build": "tsc --noEmit && vite build",
     "start": "electron .",
-    "dist": "npm run build && electron-builder --mac"
+    "dist": "npm run build && electron-builder --mac",
+    "dist:win": "npm run build && electron-builder --win"
   },
   "build": {
     "appId": "local.personal.reader",
@@ -31,6 +33,16 @@
       ],
       "identity": "-",
       "hardenedRuntime": false
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
     },
     "directories": {
       "output": "release"

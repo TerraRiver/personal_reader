@@ -381,6 +381,10 @@ tr:hover .col-actions .link,
   padding: 0 20px 0 96px; /* clear the traffic lights */
   border-bottom: 3px solid var(--rule);
 }
+/* Windows / Linux: window controls sit at the top right (titleBarOverlay) instead. */
+html:not([data-platform='mac']) .reader-titlebar {
+  padding: 0 calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 20px) 0 20px;
+}
 .reader-titlebar .back {
   justify-self: start;
 }

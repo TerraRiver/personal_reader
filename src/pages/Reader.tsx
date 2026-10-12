@@ -6,6 +6,7 @@ import { type NoteView, layout, noteForPage, normalizeNotebook } from '../notes'
 import PdfViewer, { type PdfViewerHandle } from '../components/PdfViewer';
 import NotesPanel from '../components/NotesPanel';
 import BookmarksPanel, { currentBookmark } from '../components/BookmarksPanel';
+import { isMod, shortcut } from '../platform';
 
 const SPLIT_KEY = 'reader.split';
 const FOLLOW_KEY = 'reader.follow';
@@ -152,14 +153,14 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
     window.addEventListener('pointerup', up);
   };
 
-  // ⌘\ toggles the notes pane.
+  // ⌘\ / Ctrl+\ toggles the notes pane, ⌘B / Ctrl+B the bookmarks.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey && e.key === '\\') {
+      if (isMod(e) && e.key === '\\') {
         e.preventDefault();
         setShowNotes((s) => !s);
       }
-      if (e.metaKey && e.key.toLowerCase() === 'b') {
+      if (isMod(e) && e.key.toLowerCase() === 'b') {
         e.preventDefault();
         toggleBookmarks();
       }
@@ -179,7 +180,7 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
           ← 书库
         </button>
         <div className="reader-title">{book?.title}</div>
-        <button className="link" onClick={() => setShowNotes((s) => !s)} title="⌘\">
+        <button className="link" onClick={() => setShowNotes((s) => !s)} title={shortcut('\\')}>
           {showNotes ? '隐藏笔记' : '显示笔记'}
         </button>
       </div>
@@ -222,7 +223,7 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
               cutPages={cutPages}
               onLoad={onLoad}
               barStart={
-                <button className={`link${showBookmarks ? ' on' : ''}`} onClick={toggleBookmarks} title="⌘B">
+                <button className={`link${showBookmarks ? ' on' : ''}`} onClick={toggleBookmarks} title={shortcut('B')}>
                   书签<span className="count-badge">{String(bookmarks?.length ?? 0).padStart(2, '0')}</span>
                 </button>
               }

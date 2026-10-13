@@ -1,6 +1,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from 'react';
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist';
 import { pdfjs } from '../pdf';
+import type { OcrLine } from '../types';
 
 const PAD = 32; // space around the page
 const MIN_SCALE = 0.25;
@@ -16,6 +17,8 @@ interface Props {
   /** Pages where a note starts / was cut, marked on the page edges. */
   startPages?: number[];
   cutPages?: number[];
+  /** Hosted OCR lines per page; used as the page's text layer when present. */
+  ocrLines?(page: number): OcrLine[] | undefined;
   onLoad?(doc: PDFDocumentProxy): void;
   /** Extra controls at the start of the toolbar, and a caption in its middle. */
   barStart?: ReactNode;
@@ -29,7 +32,7 @@ const isTyping = (t: EventTarget | null) =>
   t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
 
 const PdfViewer = forwardRef<PdfViewerHandle, Props>(function PdfViewer(
-  { data, initialPage, startPages = [], cutPages = [], onLoad, onPageChange, barStart, barCenter },
+  { data, initialPage, startPages = [], cutPages = [], ocrLines, onLoad, onPageChange, barStart, barCenter },
   ref,
 ) {
   const stageRef = useRef<HTMLDivElement>(null);
@@ -262,6 +265,7 @@ const PdfViewer = forwardRef<PdfViewerHandle, Props>(function PdfViewer(
                 height={vp.height * scale}
                 cut={isCut}
                 start={isStart}
+                ocr={ocrLines?.(page)}
               />
             </div>
           )}
@@ -292,9 +296,10 @@ interface PageProps {
   height: number;
   cut: boolean;
   start: boolean;
+  ocr?: OcrLine[];
 }
 
-function PdfPage({ page, scale, dir, width, height, cut, start }: PageProps) {
+function PdfPage({ page, scale, dir, width, height, cut, start, ocr }: PageProps) {
   const sheet = useRef<HTMLDivElement>(null);
   const canvasHost = useRef<HTMLDivElement>(null);
   const textHost = useRef<HTMLDivElement>(null);
@@ -344,6 +349,11 @@ function PdfPage({ page, scale, dir, width, height, cut, start }: PageProps) {
             ],
             { duration: 180, easing: 'cubic-bezier(.2,.7,.2,1)' },
           );
+        if (ocr) {
+          const base = page.getViewport({ scale: 1 });
+          renderOcrLayer(textDiv, ocr, base.width, base.height);
+          return;
+        }
         textLayer = new pdfjs.TextLayer({
           textContentSource: page.streamTextContent(),
           container: textDiv,
@@ -359,7 +369,7 @@ function PdfPage({ page, scale, dir, width, height, cut, start }: PageProps) {
       textLayer?.cancel();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, renderScale]);
+  }, [page, renderScale, ocr]);
 
   return (
     <div
@@ -383,4 +393,52 @@ function PdfPage({ page, scale, dir, width, height, cut, start }: PageProps) {
       {cut && <div className="cut-mark">截断于本页</div>}
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// OCR text layer
+//
+// Same structure as pdf.js's text layer, so selection looks and behaves the
+// same: one transparent span per recognized line, sized by --font-height (page
+// units at scale 1), stretched to the line's width and turned to its angle.
+
+const FONT = 'sans-serif';
+let measureCtx: CanvasRenderingContext2D | null = null;
+const measure = (text: string, size: number) => {
+  measureCtx ??= document.createElement('canvas').getContext('2d')!;
+  measureCtx.font = `${size}px ${FONT}`;
+  return measureCtx.measureText(text).width || size * text.length;
+};
+
+function renderOcrLayer(container: HTMLElement, lines: OcrLine[], w: number, h: number) {
+  const frag = document.createDocumentFragment();
+  for (const [text, x0, y0, x1, y1, , , x3, y3] of lines) {
+    // Edges in page units: top edge (p0 -> p1) and left edge (p0 -> p3).
+    const tx = (x1 - x0) * w;
+    const ty = (y1 - y0) * h;
+    const lx = (x3 - x0) * w;
+    const ly = (y3 - y0) * h;
+    const along = Math.hypot(tx, ty);
+    const across = Math.hypot(lx, ly);
+    if (!along || !across) continue;
+
+    const span = document.createElement('span');
+    span.textContent = text;
+    span.style.left = `${x0 * 100}%`;
+    span.style.top = `${y0 * 100}%`;
+    span.style.fontFamily = FONT;
+    const vertical = across > along * 1.5 && text.length > 1;
+    if (vertical) {
+      // A column of upright characters, e.g. traditional vertical Chinese.
+      span.style.writingMode = 'vertical-rl';
+      span.style.setProperty('--font-height', `${along}px`);
+      span.style.transform = `scaleY(${across / measure(text, along)}) scale(var(--min-font-size-inv))`;
+    } else {
+      span.style.setProperty('--font-height', `${across}px`);
+      span.style.setProperty('--scale-x', String(along / measure(text, across)));
+      span.style.setProperty('--rotate', `${Math.atan2(ty, tx)}rad`);
+    }
+    frag.append(span, document.createElement('br'));
+  }
+  container.replaceChildren(frag);
 }

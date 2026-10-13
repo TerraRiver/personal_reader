@@ -8,6 +8,36 @@ export interface Book {
   /** Detected once in the background: real text, an OCR layer over scans, or scans only. */
   textLayer?: TextLayerKind;
   bookmarkCount?: number;
+  /** Hosted OCR run (PaddleOCR), kept apart from the PDF's own text. */
+  ocr?: { state: 'running' | 'done' | 'failed'; model?: string; at?: number; error?: string };
+}
+
+/** Live progress of an OCR run, pushed from the main process. */
+export interface OcrProgress {
+  state: 'queued' | 'running' | 'done' | 'failed';
+  done?: number;
+  total?: number;
+  error?: string;
+}
+
+/**
+ * A recognized line: its text, then the polygon's four corners clockwise from
+ * the top left, as fractions of the page width and height.
+ */
+export type OcrLine = [string, number, number, number, number, number, number, number, number];
+
+export interface OcrTokenInfo {
+  /** 'saved': set in settings; 'dev': from .env or PADDLEOCR_ACCESS_TOKEN. */
+  source: 'saved' | 'dev' | null;
+  masked: string | null;
+}
+
+export interface OcrData {
+  model: string;
+  total: number;
+  /** Keyed by 1-based page number; only pages recognized so far. */
+  pages: Record<string, { lines: OcrLine[] }>;
+  finishedAt: number | null;
 }
 
 export type TextLayerKind = 'native' | 'ocr' | 'none';
@@ -58,6 +88,16 @@ export interface Api {
   /** null until the book's bookmarks were first imported from the PDF. */
   listBookmarks(bookId: string): Promise<Bookmark[] | null>;
   saveBookmarks(bookId: string, bookmarks: Bookmark[]): Promise<void>;
+  startOcr(bookId: string): Promise<void>;
+  ocrStatus(): Promise<Record<string, OcrProgress>>;
+  loadOcr(bookId: string): Promise<OcrData | null>;
+  /** Where the OCR token comes from, never the token itself. */
+  ocrTokenInfo(): Promise<OcrTokenInfo>;
+  /** Verifies the token with the service, then stores it encrypted. Resolves to an error message, or null. */
+  saveOcrToken(token: string): Promise<string | null>;
+  clearOcrToken(): Promise<void>;
+  /** Subscribe to OCR progress; returns an unsubscribe. */
+  onOcrProgress(fn: (bookId: string, progress: OcrProgress | undefined) => void): () => void;
   /** Run `fn` before the window closes, waiting for its promise. Returns an unsubscribe. */
   onBeforeClose(fn: () => Promise<unknown>): () => void;
 }

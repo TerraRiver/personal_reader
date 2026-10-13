@@ -19,6 +19,17 @@ contextBridge.exposeInMainWorld('api', {
   saveNotes: (bookId, notebook) => ipcRenderer.invoke('notes:save', bookId, notebook),
   listBookmarks: (bookId) => ipcRenderer.invoke('bookmarks:list', bookId),
   saveBookmarks: (bookId, bookmarks) => ipcRenderer.invoke('bookmarks:save', bookId, bookmarks),
+  startOcr: (bookId) => ipcRenderer.invoke('ocr:start', bookId),
+  ocrStatus: () => ipcRenderer.invoke('ocr:status'),
+  loadOcr: (bookId) => ipcRenderer.invoke('ocr:load', bookId),
+  ocrTokenInfo: () => ipcRenderer.invoke('settings:ocrToken'),
+  saveOcrToken: (token) => ipcRenderer.invoke('settings:saveOcrToken', token),
+  clearOcrToken: () => ipcRenderer.invoke('settings:clearOcrToken'),
+  onOcrProgress: (fn) => {
+    const listener = (_e, bookId, progress) => fn(bookId, progress);
+    ipcRenderer.on('ocr:progress', listener);
+    return () => ipcRenderer.removeListener('ocr:progress', listener);
+  },
   onBeforeClose: (fn) => {
     flushers.add(fn);
     return () => flushers.delete(fn);

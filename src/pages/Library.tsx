@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, type Book, type TextLayerKind } from '../types';
+import { api, type Book, type OcrProgress, type TextLayerKind } from '../types';
 import { analyzeBook } from '../pdf';
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -22,7 +22,74 @@ function formatDate(ts: number | null) {
   return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())}`;
 }
 
-export default function Library({ onOpen }: { onOpen: (id: string) => void }) {
+/** The text column: what the PDF has, or the state of a hosted OCR run. */
+function TextCell({
+  book,
+  live,
+  detectFailed,
+  hasToken,
+  onOpenSettings,
+}: {
+  book: Book;
+  live?: OcrProgress;
+  detectFailed: boolean;
+  hasToken: boolean;
+  onOpenSettings(): void;
+}) {
+  // Without a token, OCR leads to the settings, where the guide is.
+  const start = () => (hasToken ? api().startOcr(book.id) : onOpenSettings());
+  if (live?.state === 'queued') return <span className="muted">等待 OCR…</span>;
+  if (live?.state === 'running' || (!live && book.ocr?.state === 'running'))
+    return (
+      <span className="muted ocr-progress">
+        OCR 中 {live?.total ? `${live.done ?? 0}/${live.total}` : '…'}
+      </span>
+    );
+  if (book.ocr?.state === 'done' && live?.state !== 'failed')
+    return (
+      <span className="tag tag-ocr" title={`${book.ocr.model ?? '飞桨'} 识别，文字可选中、复制`}>
+        已 OCR
+      </span>
+    );
+  if (live?.state === 'failed' || book.ocr?.state === 'failed') {
+    const error = live?.error ?? book.ocr?.error ?? '';
+    return (
+      <>
+        <span className="ocr-failed" title={error}>
+          OCR 失败
+        </span>
+        {/令牌/.test(error) ? (
+          <button className="link small" onClick={onOpenSettings} title={error}>
+            设置令牌
+          </button>
+        ) : (
+          <button className="link small" onClick={start} title="从中断处继续">
+            重试
+          </button>
+        )}
+      </>
+    );
+  }
+  if (!book.textLayer) return <span className="muted">{detectFailed ? '无法检测' : '检测中…'}</span>;
+  return (
+    <>
+      <span className={`tag tag-${book.textLayer}`} title={TEXT_HINT[book.textLayer]}>
+        {TEXT_LABEL[book.textLayer]}
+      </span>
+      {book.textLayer === 'none' && (
+        <button
+          className="link small"
+          onClick={start}
+          title={hasToken ? '用飞桨 PP-OCRv6 识别文字，让扫描页可选中、复制' : '需要先设置飞桨访问令牌'}
+        >
+          OCR
+        </button>
+      )}
+    </>
+  );
+}
+
+export default function Library({ onOpen, onOpenSettings }: { onOpen(id: string): void; onOpenSettings(): void }) {
   const [books, setBooks] = useState<Book[] | null>(null);
   const [dragging, setDragging] = useState(false);
   const [confirmId, setConfirmId] = useState<string | null>(null);
@@ -44,6 +111,19 @@ export default function Library({ onOpen }: { onOpen: (id: string) => void }) {
       .then(setBooks)
       .catch(() => setFailed((f) => [...f, next.id]));
   }, [books]);
+
+  // Hosted OCR runs: live progress from the main process.
+  const [ocr, setOcr] = useState<Record<string, OcrProgress>>({});
+  const [hasToken, setHasToken] = useState(true);
+  useEffect(() => {
+    api().ocrStatus().then(setOcr);
+    api().ocrTokenInfo().then((t) => setHasToken(!!t.source));
+    return api().onOcrProgress((id, p) => {
+      setOcr(({ [id]: _, ...rest }) => (p ? { ...rest, [id]: p } : rest));
+      // The book record changes when a run ends.
+      if (p?.state === 'done' || p?.state === 'failed') api().listBooks().then(setBooks);
+    });
+  }, []);
 
   const sorted = [...(books ?? [])].sort(
     (a, b) => (b.openedAt ?? b.addedAt) - (a.openedAt ?? a.addedAt),
@@ -77,7 +157,11 @@ export default function Library({ onOpen }: { onOpen: (id: string) => void }) {
       onDragOver={(e) => e.preventDefault()}
       onDrop={onDrop}
     >
-      <div className="titlebar" />
+      <div className="titlebar library-titlebar">
+        <button className="link" onClick={onOpenSettings}>
+          设置
+        </button>
+      </div>
 
       <header className="library-header">
         <h1>书库</h1>
@@ -133,14 +217,14 @@ export default function Library({ onOpen }: { onOpen: (id: string) => void }) {
                     )}
                   </td>
                   <td className="col-num">{b.pageCount || '—'}</td>
-                  <td className="col-tag">
-                    {b.textLayer ? (
-                      <span className={`tag tag-${b.textLayer}`} title={TEXT_HINT[b.textLayer]}>
-                        {TEXT_LABEL[b.textLayer]}
-                      </span>
-                    ) : (
-                      <span className="muted">{failed.includes(b.id) ? '无法检测' : '检测中…'}</span>
-                    )}
+                  <td className="col-tag" onClick={(e) => e.stopPropagation()}>
+                    <TextCell
+                      book={b}
+                      live={ocr[b.id]}
+                      detectFailed={failed.includes(b.id)}
+                      hasToken={hasToken}
+                      onOpenSettings={onOpenSettings}
+                    />
                   </td>
                   <td className="col-tag">
                     {b.bookmarkCount === undefined ? (

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
-import { api, type Book, type Bookmark, type Notebook } from '../types';
+import { api, type Book, type Bookmark, type Notebook, type OcrData } from '../types';
 import { loadBookmarks } from '../pdf';
 import { type NoteView, layout, noteForPage, normalizeNotebook } from '../notes';
 import PdfViewer, { type PdfViewerHandle } from '../components/PdfViewer';
@@ -24,6 +24,7 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
   const [bookmarks, setBookmarks] = useState<Bookmark[] | null>(null);
   const [showBookmarks, setShowBookmarks] = useState(() => localStorage.getItem(BOOKMARKS_KEY) === '1');
   const [pageCount, setPageCount] = useState(0);
+  const [ocr, setOcr] = useState<OcrData | null>(null);
   const viewer = useRef<PdfViewerHandle>(null);
   const body = useRef<HTMLDivElement>(null);
 
@@ -44,6 +45,15 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
       api().updateBook(bookId, { openedAt: Date.now() });
     })();
   }, [bookId]);
+
+  // ----- hosted OCR text, reloaded when a run for this book finishes -----
+  useEffect(() => {
+    api().loadOcr(bookId).then(setOcr);
+    return api().onOcrProgress((id, p) => {
+      if (id === bookId && p?.state === 'done') api().loadOcr(bookId).then(setOcr);
+    });
+  }, [bookId]);
+  const ocrLines = useCallback((p: number) => ocr?.pages[p]?.lines, [ocr]);
 
   // ----- persist notes and reading position -----
   // Writes are debounced, and whatever is still pending is flushed when leaving
@@ -226,6 +236,7 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
               initialPage={book.lastPage || 1}
               startPages={startPages}
               cutPages={cutPages}
+              ocrLines={ocrLines}
               onLoad={onLoad}
               barStart={
                 <button className={`link${showBookmarks ? ' on' : ''}`} onClick={toggleBookmarks} title={shortcut('B')}>

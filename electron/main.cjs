@@ -2,6 +2,8 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const crypto = require('node:crypto');
+const { createOcr, checkToken } = require('./ocr.cjs');
+const createSettings = require('./settings.cjs');
 
 const DEV_URL = 'http://localhost:5173';
 
@@ -13,12 +15,14 @@ if (process.env.READER_DATA_DIR) app.setPath('userData', process.env.READER_DATA
 // <userData>/library/books/<id>.pdf copied pdf files
 // <userData>/library/notes/<id>.json notes of one book
 // <userData>/library/bookmarks/<id>.json bookmarks of one book
+// <userData>/library/ocr/<id>.json       hosted OCR results of one book
 
 const root = () => path.join(app.getPath('userData'), 'library');
 const libraryFile = () => path.join(root(), 'library.json');
 const bookFile = (id) => path.join(root(), 'books', `${id}.pdf`);
 const notesFile = (id) => path.join(root(), 'notes', `${id}.json`);
 const bookmarksFile = (id) => path.join(root(), 'bookmarks', `${id}.json`);
+const ocrFile = (id) => path.join(root(), 'ocr', `${id}.json`);
 
 // Missing files fall back to the default. A file that exists but can't be parsed
 // is moved aside first, so the next save can never overwrite the only copy.
@@ -85,6 +89,28 @@ async function importPaths(paths) {
   });
 }
 
+function updateBook(id, patch) {
+  return serial(async () => {
+    const books = await loadBooks();
+    const book = books.find((b) => b.id === id);
+    if (book) Object.assign(book, patch);
+    await saveBooks(books);
+    return books;
+  });
+}
+
+const settings = createSettings({ readJson, writeJson });
+
+const ocr = createOcr({
+  getToken: async () => (await settings.ocrToken()).token,
+  ocrFile,
+  bookFile,
+  readJson,
+  writeJson,
+  getBook: async (id) => (await loadBooks()).find((b) => b.id === id),
+  updateBook,
+});
+
 // ---------- ipc ----------
 ipcMain.handle('library:list', () => loadBooks());
 
@@ -101,26 +127,20 @@ ipcMain.handle('library:import', async (e) => {
 
 ipcMain.handle('library:importPaths', (_e, paths) => importPaths(paths));
 
-ipcMain.handle('library:update', (_e, id, patch) =>
-  serial(async () => {
-    const books = await loadBooks();
-    const book = books.find((b) => b.id === id);
-    if (book) Object.assign(book, patch);
-    await saveBooks(books);
-    return books;
-  }),
-);
+ipcMain.handle('library:update', (_e, id, patch) => updateBook(id, patch));
 
-ipcMain.handle('library:remove', (_e, id) =>
-  serial(async () => {
+ipcMain.handle('library:remove', (_e, id) => {
+  ocr.cancel(id);
+  return serial(async () => {
     const books = (await loadBooks()).filter((b) => b.id !== id);
     await saveBooks(books);
     await fs.rm(bookFile(id), { force: true });
     await fs.rm(notesFile(id), { force: true });
     await fs.rm(bookmarksFile(id), { force: true });
+    await fs.rm(ocrFile(id), { force: true });
     return books;
-  }),
-);
+  });
+});
 
 ipcMain.handle('book:data', (_e, id) => fs.readFile(bookFile(id)));
 
@@ -135,6 +155,26 @@ ipcMain.handle('bookmarks:list', (_e, bookId) => readJson(bookmarksFile(bookId),
 ipcMain.handle('bookmarks:save', (_e, bookId, bookmarks) =>
   serial(() => writeJson(bookmarksFile(bookId), bookmarks)),
 );
+
+ipcMain.handle('ocr:start', (_e, bookId) => ocr.start(bookId));
+ipcMain.handle('ocr:status', () => ocr.status());
+ipcMain.handle('ocr:load', (_e, bookId) => readJson(ocrFile(bookId), null));
+
+ipcMain.handle('settings:ocrToken', () => settings.ocrTokenInfo());
+// Saved only after the service accepts it. Resolves to an error message, or null.
+ipcMain.handle('settings:saveOcrToken', async (_e, token) => {
+  const t = String(token ?? '').trim();
+  if (!t) return '请先粘贴令牌';
+  try {
+    const error = await checkToken(t);
+    if (error) return error;
+    await settings.saveOcrToken(t);
+    return null;
+  } catch (err) {
+    return err.message;
+  }
+});
+ipcMain.handle('settings:clearOcrToken', () => settings.clearOcrToken());
 
 // ---------- window ----------
 let quitting = false;
@@ -209,6 +249,7 @@ app.whenReady().then(() => {
   // Packaged builds get the icon from the bundle; show it in the Dock during development too.
   if (!app.isPackaged) app.dock?.setIcon(path.join(__dirname, '..', 'build', 'icon.png'));
   createWindow();
+  loadBooks().then((books) => ocr.resume(books));
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

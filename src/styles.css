@@ -279,7 +279,7 @@ textarea {
   width: 200px;
 }
 .col-tag {
-  width: 104px;
+  width: 150px;
   font-size: 12px;
   white-space: nowrap;
 }
@@ -298,6 +298,16 @@ textarea {
 .tag-ocr {
   background: var(--fg);
   color: var(--bg);
+}
+.col-tag .link.small {
+  margin-left: 10px;
+}
+.ocr-progress {
+  font-variant-numeric: tabular-nums;
+}
+.ocr-failed {
+  color: var(--accent);
+  cursor: help;
 }
 .col-progress .progress {
   display: inline-block;
@@ -1367,4 +1377,151 @@ li.current .bm-title {
   width: 40px;
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+/* ==========================================================================
+   Settings
+   ========================================================================== */
+
+.library-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 var(--gutter);
+}
+html:not([data-platform='mac']) .library-titlebar {
+  padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + var(--gutter));
+}
+
+.settings {
+  height: 100%;
+  overflow: auto;
+}
+.settings-titlebar {
+  display: flex;
+  align-items: center;
+  padding: 0 var(--gutter) 0 96px; /* clear the traffic lights */
+}
+html:not([data-platform='mac']) .settings-titlebar {
+  padding-left: var(--gutter);
+}
+.settings-header {
+  grid-template-columns: 1fr;
+}
+
+.settings-section {
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) 2fr;
+  gap: 48px;
+  margin: 0 var(--gutter);
+  padding: 32px 0 64px;
+  border-bottom: 1px solid var(--hair);
+}
+.settings-label h2 {
+  margin: 0 0 4px;
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.settings-label p {
+  margin: 0 0 12px;
+  max-width: 28em;
+  font-size: 13px;
+}
+
+.settings-kicker {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.token-status {
+  padding-bottom: 24px;
+  border-bottom: 3px solid var(--rule);
+}
+.token-line {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.token-line code {
+  font-family: var(--mono);
+  font-size: 13px;
+  user-select: text;
+}
+
+.steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.steps li {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  padding: 24px 0;
+  border-bottom: 1px solid var(--hair);
+}
+.step-no {
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.steps h3 {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 700;
+}
+.steps p {
+  margin: 0;
+  font-size: 13px;
+}
+.step-action {
+  margin-top: 14px;
+  color: var(--fg);
+  text-decoration: none;
+}
+.step-action:hover {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+.token-input {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 14px;
+  max-width: 560px;
+}
+.token-input input {
+  flex: 1;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid var(--fg);
+  outline: none;
+  font-family: var(--mono);
+  font-size: 13px;
+  background: none;
+}
+.token-input input:focus {
+  border-bottom-color: var(--accent);
+}
+.token-ok {
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+
+.settings-notes {
+  margin: 24px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+.settings-notes li + li {
+  margin-top: 4px;
 }

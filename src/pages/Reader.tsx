@@ -303,11 +303,13 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
   const selectNote = useCallback(
     (id: string) => {
       setActiveId(id);
+      // Following works both ways: with it off, picking a note leaves the PDF alone.
+      if (!follow) return;
       const v = views.find((x) => x.seg.id === id);
       // Bring the note's pages into view unless we're already inside its range.
       if (v?.range && (page < v.range.start || page > v.last)) viewer.current?.goTo(v.range.start);
     },
-    [views, page],
+    [views, page, follow],
   );
 
   const goTo = useCallback((p: number) => viewer.current?.goTo(p), []);

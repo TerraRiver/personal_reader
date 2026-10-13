@@ -120,7 +120,10 @@ export default function NotesPanel(props: Props) {
           </button>
         </div>
         <div className="bar-right">
-          <label className="toggle" title="翻阅 PDF 时自动切换到对应页码的笔记">
+          <label
+            className="toggle"
+            title="开启：翻 PDF 时切换到对应的笔记，选笔记时 PDF 翻到它的页码。关闭：两边互不跟随"
+          >
             <input type="checkbox" checked={follow} onChange={(e) => onFollowChange(e.target.checked)} />
             <span className="toggle-box" />
             跟随翻页

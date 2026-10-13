@@ -75,7 +75,7 @@ export default function StampPalette({ counters, placing, color, onColor, onPick
         {placing ? (
           <span>点击页面盖章，可连续盖 · Esc 或关闭面板结束</span>
         ) : (
-          <span className="muted">选一个图章，再点击页面。盖好的图章可拖动、拖角缩放，序号选中后按数字键改。</span>
+          <span className="muted">选一个图章，再点击页面（也可以在页面上右键直接盖）。盖好的图章可拖动、拖角缩放，序号选中后按数字键改。</span>
         )}
         <button
           className="link small"

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { MarkColor, MarkStyle, Stamp, StampType, TextMark } from '../types';
-import { COLORS, STYLES, colorOf, isNumberStamp, lineBoxes, wavyPath } from '../annotations';
+import type { Annotations, MarkColor, MarkStyle, Stamp, StampType, TextMark } from '../types';
+import { COLORS, STAMPS, STYLES, colorOf, isNumberStamp, lineBoxes, wavyPath } from '../annotations';
 
 const COLOR_KEY = 'reader.markColor';
 
@@ -118,10 +118,15 @@ interface OverlayProps {
   /** The stamp being placed, or null. */
   placing: StampType | null;
   autoCopy: boolean;
+  /** For the right-click stamp menu: next numbers and the current stamp color. */
+  counters: Annotations['counters'];
+  stampColor: MarkColor;
+  onStampColor(color: MarkColor): void;
   onAddMark(mark: Omit<TextMark, 'id' | 'createdAt' | 'page'>): void;
   onUpdateMark(id: string, patch: Partial<TextMark>): void;
   onDeleteMark(id: string): void;
-  onPlaceStamp(x: number, y: number): void;
+  /** Place a stamp centred at (x, y), as fractions of the page. */
+  onPlaceStamp(type: StampType, x: number, y: number): void;
   /** `group`: successive updates in the same group undo as one step. */
   onUpdateStamp(id: string, patch: Partial<Stamp>, group?: string): void;
   onDeleteStamp(id: string): void;
@@ -136,6 +141,8 @@ export function AnnotationOverlay(props: OverlayProps) {
   const root = useRef<HTMLDivElement>(null);
   const [bar, setBar] = useState<Bar | null>(null);
   const [selectedStamp, setSelectedStamp] = useState<string | null>(null);
+  /** Right-click stamp menu, at this point of the page (CSS pixels). */
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [color, setColorState] = useState<MarkColor>(() => {
     try {
       return (localStorage.getItem(COLOR_KEY) as MarkColor) || 'yellow';
@@ -160,7 +167,7 @@ export function AnnotationOverlay(props: OverlayProps) {
     const pageEl = root.current?.parentElement;
     if (!pageEl) return;
     const onUp = (e: MouseEvent) => {
-      if ((e.target as HTMLElement).closest('.stamp, .mark-bar')) return;
+      if (e.button !== 0 || (e.target as HTMLElement).closest('.stamp, .mark-bar, .stamp-menu')) return;
       // Let the selection settle first.
       setTimeout(() => {
         const sel = getSelection();
@@ -189,8 +196,21 @@ export function AnnotationOverlay(props: OverlayProps) {
         setBar(hit ? { kind: 'mark', id: hit.id } : null);
       });
     };
+    // Right click: pick a stamp to put right there.
+    const onMenu = (e: MouseEvent) => {
+      if ((e.target as HTMLElement).closest('.stamp-menu')) return;
+      e.preventDefault();
+      const rect = pageEl.getBoundingClientRect();
+      setBar(null);
+      setSelectedStamp(null);
+      setMenu({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    };
     pageEl.addEventListener('mouseup', onUp);
-    return () => pageEl.removeEventListener('mouseup', onUp);
+    pageEl.addEventListener('contextmenu', onMenu);
+    return () => {
+      pageEl.removeEventListener('mouseup', onUp);
+      pageEl.removeEventListener('contextmenu', onMenu);
+    };
   }, []);
 
   // The toolbar for a selection goes away with the selection.
@@ -212,6 +232,7 @@ export function AnnotationOverlay(props: OverlayProps) {
       if (e.key === 'Escape') {
         setBar(null);
         setSelectedStamp(null);
+        setMenu(null);
       }
       const stamp = latest.current.stamps.find((s) => s.id === selectedStamp);
       if (stamp && isNumberStamp(stamp.type)) {
@@ -261,8 +282,24 @@ export function AnnotationOverlay(props: OverlayProps) {
           className="stamp-capture"
           onClick={(e) => {
             const r = e.currentTarget.getBoundingClientRect();
-            props.onPlaceStamp((e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height);
+            props.onPlaceStamp(placing, (e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height);
           }}
+        />
+      )}
+
+      {menu && (
+        <StampMenu
+          at={menu}
+          width={width}
+          height={height}
+          counters={props.counters}
+          color={props.stampColor}
+          onColor={props.onStampColor}
+          onPick={(type) => {
+            props.onPlaceStamp(type, menu.x / width, menu.y / height);
+            setMenu(null);
+          }}
+          onClose={() => setMenu(null)}
         />
       )}
 
@@ -420,6 +457,79 @@ function StyleIcon({ style, color }: { style: MarkStyle; color: MarkColor }) {
         文
       </text>
     </svg>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+/** Compact stamp picker opened by a right click; the stamp lands where the click was. */
+function StampMenu({
+  at,
+  width,
+  height,
+  counters,
+  color,
+  onColor,
+  onPick,
+  onClose,
+}: {
+  at: { x: number; y: number };
+  width: number;
+  height: number;
+  counters: Annotations['counters'];
+  color: MarkColor;
+  onColor(c: MarkColor): void;
+  onPick(type: StampType): void;
+  onClose(): void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ left: at.x, top: at.y });
+
+  // Open down and to the right of the pointer; flip when it would leave the page.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const w = el.offsetWidth;
+    const h = el.offsetHeight;
+    const left = at.x + w + 4 > width ? Math.max(4, at.x - w) : at.x;
+    const top = at.y + h + 4 > height ? Math.max(4, at.y - h) : at.y;
+    setPos({ left, top });
+  }, [at, width, height]);
+
+  useEffect(() => {
+    const onDown = (e: PointerEvent) => {
+      if (!ref.current?.contains(e.target as Node)) onClose();
+    };
+    const onWheel = () => onClose();
+    window.addEventListener('pointerdown', onDown, true);
+    window.addEventListener('wheel', onWheel, { passive: true });
+    return () => {
+      window.removeEventListener('pointerdown', onDown, true);
+      window.removeEventListener('wheel', onWheel);
+    };
+  }, [onClose]);
+
+  return (
+    <div ref={ref} className="stamp-menu" style={pos} onContextMenu={(e) => e.preventDefault()}>
+      <div className="stamp-menu-colors">
+        {COLORS.map((c) => (
+          <button
+            key={c.id}
+            className={`swatch${c.id === color ? ' active' : ''}`}
+            style={{ background: c.ink, borderColor: c.ink }}
+            title={c.name}
+            onClick={() => onColor(c.id)}
+          />
+        ))}
+      </div>
+      <div className="stamp-menu-grid">
+        {STAMPS.map(({ id, name }) => (
+          <button key={id} className="stamp-pick" title={name} onClick={() => onPick(id)}>
+            <StampGlyph type={id} n={isNumberStamp(id) ? counters[id] : undefined} color={color} />
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 

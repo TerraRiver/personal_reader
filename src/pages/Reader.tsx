@@ -204,10 +204,12 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
             changeAnnotations((a) => ({ ...a, marks: a.marks.map((m) => (m.id === id ? { ...m, ...patch } : m)) }))
           }
           onDeleteMark={(id) => changeAnnotations((a) => ({ ...a, marks: a.marks.filter((m) => m.id !== id) }))}
-          onPlaceStamp={(x, y) =>
-            placing &&
+          counters={annotations.counters}
+          stampColor={stampColor}
+          onStampColor={setStampColor}
+          onPlaceStamp={(type, x, y) =>
             changeAnnotations((a) => {
-              const n = isNumberStamp(placing) ? a.counters[placing] : undefined;
+              const n = isNumberStamp(type) ? a.counters[type] : undefined;
               return {
                 ...a,
                 stamps: [
@@ -215,7 +217,7 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
                   {
                     id: crypto.randomUUID(),
                     page: p,
-                    type: placing,
+                    type,
                     x,
                     y,
                     size: STAMP_SIZE,
@@ -224,7 +226,7 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
                     createdAt: Date.now(),
                   },
                 ],
-                counters: isNumberStamp(placing) ? { ...a.counters, [placing]: a.counters[placing] + 1 } : a.counters,
+                counters: isNumberStamp(type) ? { ...a.counters, [type]: a.counters[type] + 1 } : a.counters,
               };
             })
           }

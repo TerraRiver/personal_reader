@@ -1886,3 +1886,38 @@ html:not([data-platform='mac']) .settings-titlebar {
   cursor: help;
 }
 
+/* Right-click stamp menu */
+.stamp-menu {
+  position: absolute;
+  z-index: 25;
+  padding: 8px;
+  background: var(--bg);
+  border: 1px solid var(--fg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  cursor: default;
+}
+.stamp-menu-colors {
+  display: flex;
+  gap: 6px;
+  padding: 0 2px 8px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--hair);
+}
+.stamp-menu-colors .swatch {
+  width: 14px;
+  height: 14px;
+}
+.stamp-menu-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 34px);
+  gap: 4px;
+}
+.stamp-menu .stamp-pick {
+  width: 34px;
+  height: 34px;
+  padding: 4px;
+}
+.stamp-menu .stamp-pick:hover {
+  background: var(--paper);
+  transform: none;
+}

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { Notebook } from '../types';
+import type { Book, Notebook } from '../types';
+import { CITE_HREF, citation, pdfPageOf, printedPage, remarkCitations } from '../citation';
 import { isMod, shortcut } from '../platform';
 import {
   type NoteView,
@@ -29,6 +30,8 @@ interface Props {
   /** Replace the notebook; optionally switch to another note. */
   onEdit(next: Notebook, activeId?: string | null): void;
   onGoTo(page: number): void;
+  book: Book;
+  onUpdateBook(patch: Partial<Book>): void;
 }
 
 type Overlay = 'index' | 'trash' | null;
@@ -68,6 +71,39 @@ export default function NotesPanel(props: Props) {
   const cut = () => {
     if (!target) return;
     onEdit(cutNote(notebook, target.seg.id, currentPage), target.seg.id);
+  };
+
+  // ----- citations: [p n] with the page number printed in the book -----
+  const { book, onUpdateBook } = props;
+  const textRef = useRef<HTMLTextAreaElement>(null);
+  const caret = useRef({ start: 0, end: 0 });
+  const [askStart, setAskStart] = useState<'insert' | 'edit' | null>(null);
+  const [frontHint, setFrontHint] = useState(false);
+  const canCite = !!view && mode === 'source';
+  const printed = book.bodyStart ? printedPage(currentPage, book.bodyStart) : undefined;
+
+  const insertCitation = (bodyStart: number) => {
+    const el = textRef.current;
+    if (!el) return;
+    const n = printedPage(currentPage, bodyStart);
+    el.focus();
+    el.setSelectionRange(caret.current.start, caret.current.end);
+    // Inserted as typing, so ⌘Z takes it back out.
+    document.execCommand('insertText', false, citation(n));
+    if (n === null) {
+      // Select the x, ready to be typed over.
+      const end = el.selectionStart;
+      el.setSelectionRange(end - 2, end - 1);
+      if (!book.citeHintOff) setFrontHint(true);
+    }
+  };
+
+  const cite = () => {
+    const el = textRef.current;
+    if (!el) return;
+    caret.current = { start: el.selectionStart, end: el.selectionEnd };
+    if (book.bodyStart) insertCitation(book.bodyStart);
+    else setAskStart('insert');
   };
 
   const toggle = (o: Overlay) => setOverlay((cur) => (cur === o ? null : o));
@@ -125,9 +161,80 @@ export default function NotesPanel(props: Props) {
         >
           截断
         </button>
+        <button
+          className="btn btn-primary btn-sm"
+          disabled={!canCite}
+          onMouseDown={(e) => e.preventDefault()} // keep the caret in the note
+          onClick={cite}
+          title={
+            !view
+              ? '打开一篇笔记后可以插入引注'
+              : mode === 'source'
+                ? '在光标处插入当前页的引注 [p 页码]'
+                : '切换到源码后可以插入引注'
+          }
+        >
+          插入引注
+        </button>
         <span className="spacer" />
-        <span className="action-page">第 {currentPage} 页</span>
+        {book.bodyStart ? (
+          <button
+            className="action-page action-page-link"
+            onClick={() => setAskStart('edit')}
+            title={`正文第 1 页 = PDF 第 ${book.bodyStart} 页。点击修改`}
+          >
+            第 {currentPage} 页 · {printed === null ? '正文前' : `书上 p${printed}`}
+          </button>
+        ) : (
+          <span className="action-page" title="首次插入引注时设置正文起始页，之后这里会显示书上的页码">
+            第 {currentPage} 页
+          </span>
+        )}
       </div>
+
+      {frontHint && (
+        <div className="cite-hint">
+          <p>
+            PDF 第 {currentPage} 页在正文之前（序言、书评等），没有可换算的页码，已插入 <code>[p x]</code>。x
+            已选中，直接输入书上的页码即可。
+          </p>
+          <div className="cite-hint-actions">
+            <label className="toggle">
+              <input
+                type="checkbox"
+                onChange={(e) => {
+                  onUpdateBook({ citeHintOff: e.target.checked });
+                  if (e.target.checked) setFrontHint(false);
+                }}
+              />
+              <span className="toggle-box" />
+              这本书不再提示
+            </label>
+            <button className="link small" onClick={() => setFrontHint(false)}>
+              知道了
+            </button>
+          </div>
+        </div>
+      )}
+
+      {askStart && (
+        <BodyStartDialog
+          initial={book.bodyStart ?? currentPage}
+          currentPage={currentPage}
+          inserting={askStart === 'insert'}
+          onCancel={() => {
+            setAskStart(null);
+            textRef.current?.focus();
+          }}
+          onConfirm={(start) => {
+            onUpdateBook({ bodyStart: start });
+            const insert = askStart === 'insert';
+            setAskStart(null);
+            if (insert) insertCitation(start);
+            else textRef.current?.focus();
+          }}
+        />
+      )}
 
       {here.length > 1 && (
         <div className="switcher">
@@ -146,7 +253,7 @@ export default function NotesPanel(props: Props) {
 
       <div className="notes-stage">
         {view ? (
-          <NoteEditor {...props} view={view} mode={mode} setMode={setMode} />
+          <NoteEditor {...props} view={view} mode={mode} setMode={setMode} textRef={textRef} />
         ) : (
           <div className="empty-page">
             <p className="start-kicker">本页没有笔记</p>
@@ -177,17 +284,20 @@ export default function NotesPanel(props: Props) {
 
 function NoteEditor({
   notebook,
-  views,
   view,
   mode,
   setMode,
-  onSelect,
   onEdit,
   onGoTo,
-}: Props & { view: NoteView; mode: Mode; setMode(m: Mode): void }) {
-  const { seg, range } = view;
-  const i = views.indexOf(view);
-  const textRef = useRef<HTMLTextAreaElement>(null);
+  book,
+  textRef,
+}: Props & {
+  view: NoteView;
+  mode: Mode;
+  setMode(m: Mode): void;
+  textRef: React.RefObject<HTMLTextAreaElement | null>;
+}) {
+  const { seg } = view;
 
   // Put the caret at the end when a note opens in the editor.
   useEffect(() => {
@@ -215,39 +325,15 @@ function NoteEditor({
 
   return (
     <div className="editor">
-      <div className="editor-meta">
-        <div className="kicker">
-          <span className="kicker-label">
-            笔记 {pad(view.no)} / {pad(views.length)}
-            {range && range.end === null && <span className="live">书写中</span>}
-          </span>
-          <span className="kicker-nav">
-            <button className="icon-btn" disabled={i <= 0} onClick={() => onSelect(views[i - 1].seg.id)} title="上一篇">
-              ‹
-            </button>
-            <button
-              className="icon-btn"
-              disabled={i >= views.length - 1}
-              onClick={() => onSelect(views[i + 1].seg.id)}
-              title="下一篇"
-            >
-              ›
-            </button>
-          </span>
+      {view.warnings.length > 0 && (
+        <div className="editor-warnings">
+          {view.warnings.map((w) => (
+            <p key={w} className="error">
+              {w}
+            </p>
+          ))}
         </div>
-        <button
-          className="range-big"
-          onClick={() => range && onGoTo(range.start)}
-          title={range ? '跳到起始页' : ''}
-        >
-          {rangeLabel(range)}
-        </button>
-        {view.warnings.map((w) => (
-          <p key={w} className="error">
-            {w}
-          </p>
-        ))}
-      </div>
+      )}
 
       <div className="editor-body">
         {mode === 'source' ? (
@@ -262,7 +348,7 @@ function NoteEditor({
         ) : (
           <div className="markdown" onDoubleClick={() => setMode('source')}>
             {stripFront(seg.content).trim() ? (
-              <Markdown content={stripFront(seg.content)} onGoTo={onGoTo} />
+              <Markdown content={stripFront(seg.content)} onGoTo={onGoTo} bodyStart={book.bodyStart} />
             ) : (
               <p className="muted">空白笔记，双击开始编辑。</p>
             )}
@@ -280,12 +366,107 @@ function NoteEditor({
   );
 }
 
-function Markdown({ content, onGoTo }: { content: string; onGoTo(page: number): void }) {
+/** Asks where the body's page 1 is, in PDF pages. */
+function BodyStartDialog({
+  initial,
+  currentPage,
+  inserting,
+  onConfirm,
+  onCancel,
+}: {
+  initial: number;
+  currentPage: number;
+  inserting: boolean;
+  onConfirm(start: number): void;
+  onCancel(): void;
+}) {
+  const [value, setValue] = useState(String(initial));
+  const n = parseInt(value, 10);
+  const valid = n >= 1;
+  const example = valid ? printedPage(currentPage, n) : null;
+  return (
+    <div className="cite-dialog" onKeyDown={(e) => e.key === 'Escape' && onCancel()}>
+      <h3>正文从哪一页开始？</h3>
+      <p className="muted">
+        引注用的是书上印的页码。请填写<strong>正文第 1 页</strong>在 PDF 里是第几页（看右侧的页码框）。
+        之后插入引注会自动换算；正文之前的序言、书评等页插入 <code>[p x]</code>，由你手动填写。
+      </p>
+      <form
+        className="cite-dialog-row"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (valid) onConfirm(n);
+        }}
+      >
+        <span>正文第 1 页 = PDF 第</span>
+        <input
+          autoFocus
+          value={value}
+          onChange={(e) => setValue(e.target.value.replace(/\D/g, ''))}
+          onFocus={(e) => e.currentTarget.select()}
+        />
+        <span>页</span>
+        <span className="spacer" />
+        <button type="button" className="link small" onClick={onCancel}>
+          取消
+        </button>
+        <button type="submit" className="btn btn-primary btn-sm" disabled={!valid}>
+          {inserting ? '确定并插入' : '确定'}
+        </button>
+      </form>
+      <p className="muted cite-dialog-example">
+        {valid &&
+          (example === null
+            ? `当前 PDF 第 ${currentPage} 页在正文之前，会插入 [p x]`
+            : `当前 PDF 第 ${currentPage} 页会插入 ${citation(example)}`)}
+      </p>
+    </div>
+  );
+}
+
+function Markdown({
+  content,
+  onGoTo,
+  bodyStart,
+}: {
+  content: string;
+  onGoTo(page: number): void;
+  /** For citations: the PDF page of the body's page 1. */
+  bodyStart?: number;
+}) {
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
+      remarkPlugins={[remarkGfm, remarkCitations]}
       components={{
         a: ({ href, children }) => {
+          // [p 12]: printed page 12, jumping to its PDF page.
+          if (href?.startsWith(CITE_HREF)) {
+            const ref = decodeURIComponent(href.slice(CITE_HREF.length));
+            const printed = /^\d+$/.test(ref) ? Number(ref) : null;
+            if (printed === null || !bodyStart)
+              return (
+                <span
+                  className="cite-ref"
+                  title={printed === null ? '正文之前的页码，无法换算跳转' : '设置正文起始页后可跳转'}
+                >
+                  {children}
+                </span>
+              );
+            const pdfPage = pdfPageOf(printed, bodyStart);
+            return (
+              <a
+                className="cite-link"
+                href={href}
+                title={`跳到书上第 ${printed} 页（PDF 第 ${pdfPage} 页）`}
+                onClick={(e) => {
+                  e.preventDefault();
+                  onGoTo(pdfPage);
+                }}
+              >
+                {children}
+              </a>
+            );
+          }
           const m = href?.match(/^#p\.?(\d+)$/i);
           if (m)
             return (
@@ -367,7 +548,7 @@ function NoteIndex({ views, activeId, currentPage, onPick }: Props & { onPick(id
 
 // ---------------------------------------------------------------------------
 
-function Trash({ notebook, onEdit, onGoTo, onRestored }: Props & { onRestored(): void }) {
+function Trash({ notebook, book, onEdit, onGoTo, onRestored }: Props & { onRestored(): void }) {
   const [openId, setOpenId] = useState<string | null>(null);
   const [confirmEmpty, setConfirmEmpty] = useState(false);
   const items = notebook.trash;
@@ -413,7 +594,7 @@ function Trash({ notebook, onEdit, onGoTo, onRestored }: Props & { onRestored():
               {openId === t.id && (
                 <>
                   <div className="markdown trash-preview">
-                    <Markdown content={stripFront(t.content)} onGoTo={onGoTo} />
+                    <Markdown content={stripFront(t.content)} onGoTo={onGoTo} bodyStart={book.bodyStart} />
                   </div>
                   <div className="trash-actions">
                     <button

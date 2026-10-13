@@ -1783,3 +1783,106 @@ html:not([data-platform='mac']) .settings-titlebar {
   font-size: 12px;
   pointer-events: none;
 }
+
+/* ----- citations ----- */
+
+.action-page-link {
+  padding: 2px 0;
+  border-bottom: 1px solid transparent;
+}
+.action-page-link:hover {
+  color: var(--fg);
+  border-bottom-color: currentColor;
+}
+
+.editor-warnings {
+  flex: none;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--hair);
+}
+.editor-warnings .error:first-child {
+  margin-top: 0;
+}
+
+.cite-hint {
+  flex: none;
+  margin: 0;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--hair);
+  border-left: 3px solid var(--accent);
+  font-size: 12px;
+  background: var(--paper);
+}
+.cite-hint p {
+  margin: 0 0 6px;
+}
+.cite-hint code,
+.cite-dialog code {
+  font-family: var(--mono);
+}
+.cite-hint-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.cite-dialog {
+  flex: none;
+  margin: 12px 20px;
+  padding: 18px 20px 12px;
+  background: var(--bg);
+  border: 1px solid var(--fg);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.14);
+}
+.cite-dialog h3 {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+.cite-dialog p {
+  margin: 0;
+  font-size: 12px;
+}
+.cite-dialog-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0 6px;
+}
+.cite-dialog-row input {
+  width: 64px;
+  height: 28px;
+  border: 0;
+  border-bottom: 1px solid var(--fg);
+  outline: none;
+  text-align: center;
+  font-size: 16px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.cite-dialog-row input:focus {
+  border-bottom-color: var(--accent);
+}
+.cite-dialog-example {
+  min-height: 1.45em;
+}
+
+.markdown a.cite-link {
+  font-family: var(--mono);
+  font-size: 0.9em;
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px dotted currentColor;
+  cursor: pointer;
+}
+.markdown a.cite-link:hover {
+  background: var(--accent);
+  color: var(--bg);
+  border-bottom-color: transparent;
+}
+.markdown .cite-ref {
+  font-family: var(--mono);
+  font-size: 0.9em;
+  color: var(--muted);
+  cursor: help;
+}
+

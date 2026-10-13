@@ -288,7 +288,14 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
   const views = useMemo(() => layout(notebook?.segments ?? []), [notebook]);
   const viewsRef = useRef<NoteView[]>([]);
   viewsRef.current = views;
+  // A jump made from a note (a citation or page link) keeps that note on
+  // screen; following resumes with the next page turn.
+  const holdNote = useRef(false);
   useEffect(() => {
+    if (holdNote.current) {
+      holdNote.current = false;
+      return;
+    }
     if (follow) setActiveId((id) => noteForPage(viewsRef.current, page, id));
   }, [page, follow]);
 
@@ -304,6 +311,24 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
   );
 
   const goTo = useCallback((p: number) => viewer.current?.goTo(p), []);
+  const pageNow = useRef(page);
+  pageNow.current = page;
+  const goToFromNote = useCallback(
+    (p: number) => {
+      const target = Math.min(Math.max(1, p), pageCount || p);
+      if (target !== pageNow.current) holdNote.current = true;
+      viewer.current?.goTo(target);
+    },
+    [pageCount],
+  );
+
+  const updateBook = useCallback(
+    (patch: Partial<Book>) => {
+      setBook((b) => (b ? { ...b, ...patch } : b));
+      api().updateBook(bookId, patch);
+    },
+    [bookId],
+  );
 
   const onLoad = useCallback(
     (doc: PDFDocumentProxy) => {
@@ -393,7 +418,7 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
       </div>
 
       <div className="reader-body" ref={body}>
-        {showNotes && notebook && (
+        {showNotes && notebook && book && (
           <>
             <section className="pane pane-notes" style={{ width: `${split * 100}%` }}>
               <NotesPanel
@@ -405,7 +430,9 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
                 onFollowChange={changeFollow}
                 onSelect={selectNote}
                 onEdit={edit}
-                onGoTo={goTo}
+                onGoTo={goToFromNote}
+                book={book}
+                onUpdateBook={updateBook}
               />
             </section>
             <div className="divider" onPointerDown={startDrag} />

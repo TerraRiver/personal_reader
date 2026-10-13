@@ -8,6 +8,13 @@ export interface Book {
   /** Detected once in the background: real text, an OCR layer over scans, or scans only. */
   textLayer?: TextLayerKind;
   bookmarkCount?: number;
+  /**
+   * The PDF page where the body text's page 1 is printed. Citations in notes
+   * use printed page numbers, counted from here. Asked on first use.
+   */
+  bodyStart?: number;
+  /** Don't explain again that pages before the body get a [p x] placeholder. */
+  citeHintOff?: boolean;
   /** Hosted OCR run (PaddleOCR), kept apart from the PDF's own text. */
   ocr?: { state: 'running' | 'done' | 'failed'; model?: string; at?: number; error?: string };
 }

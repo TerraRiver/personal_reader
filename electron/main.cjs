@@ -16,6 +16,7 @@ if (process.env.READER_DATA_DIR) app.setPath('userData', process.env.READER_DATA
 // <userData>/library/notes/<id>.json notes of one book
 // <userData>/library/bookmarks/<id>.json bookmarks of one book
 // <userData>/library/ocr/<id>.json       hosted OCR results of one book
+// <userData>/library/annotations/<id>.json  highlights and stamps of one book
 
 const root = () => path.join(app.getPath('userData'), 'library');
 const libraryFile = () => path.join(root(), 'library.json');
@@ -23,6 +24,7 @@ const bookFile = (id) => path.join(root(), 'books', `${id}.pdf`);
 const notesFile = (id) => path.join(root(), 'notes', `${id}.json`);
 const bookmarksFile = (id) => path.join(root(), 'bookmarks', `${id}.json`);
 const ocrFile = (id) => path.join(root(), 'ocr', `${id}.json`);
+const annotationsFile = (id) => path.join(root(), 'annotations', `${id}.json`);
 
 // Missing files fall back to the default. A file that exists but can't be parsed
 // is moved aside first, so the next save can never overwrite the only copy.
@@ -138,6 +140,7 @@ ipcMain.handle('library:remove', (_e, id) => {
     await fs.rm(notesFile(id), { force: true });
     await fs.rm(bookmarksFile(id), { force: true });
     await fs.rm(ocrFile(id), { force: true });
+    await fs.rm(annotationsFile(id), { force: true });
     return books;
   });
 });
@@ -154,6 +157,12 @@ ipcMain.handle('bookmarks:list', (_e, bookId) => readJson(bookmarksFile(bookId),
 
 ipcMain.handle('bookmarks:save', (_e, bookId, bookmarks) =>
   serial(() => writeJson(bookmarksFile(bookId), bookmarks)),
+);
+
+ipcMain.handle('annotations:list', (_e, bookId) => readJson(annotationsFile(bookId), null));
+
+ipcMain.handle('annotations:save', (_e, bookId, annotations) =>
+  serial(() => writeJson(annotationsFile(bookId), annotations)),
 );
 
 ipcMain.handle('ocr:start', (_e, bookId) => ocr.start(bookId));
@@ -237,6 +246,19 @@ function createWindow() {
   });
 
   flushBeforeClose(win);
+
+  // Undo / redo go to the page, which decides between text fields (native undo)
+  // and annotations. Taken here so the Edit menu can't handle them as well.
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || input.alt) return;
+    if (!(process.platform === 'darwin' ? input.meta : input.control)) return;
+    const key = input.key.toLowerCase();
+    const action =
+      key === 'z' ? (input.shift ? 'redo' : 'undo') : key === 'y' && process.platform !== 'darwin' ? 'redo' : null;
+    if (!action) return;
+    event.preventDefault();
+    win.webContents.send('edit:history', action);
+  });
 
   if (app.isPackaged || process.env.READER_PROD) {
     win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));

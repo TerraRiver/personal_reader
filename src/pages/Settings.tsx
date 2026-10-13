@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, type OcrTokenInfo } from '../types';
+import { AUTO_COPY_KEY, autoCopyEnabled } from '../annotations';
 
 const TOKEN_PAGE = 'https://aistudio.baidu.com/account/accessToken';
 
@@ -16,8 +17,39 @@ export default function Settings({ onClose }: { onClose(): void }) {
         <h1>设置</h1>
       </header>
 
+      <ReadingSection />
       <OcrTokenSection />
     </div>
+  );
+}
+
+function ReadingSection() {
+  const [autoCopy, setAutoCopy] = useState(autoCopyEnabled);
+  return (
+    <section className="settings-section">
+      <div className="settings-label">
+        <h2>阅读</h2>
+      </div>
+      <div className="settings-body">
+        <label className="toggle settings-toggle">
+          <input
+            type="checkbox"
+            checked={autoCopy}
+            onChange={(e) => {
+              setAutoCopy(e.target.checked);
+              try {
+                localStorage.setItem(AUTO_COPY_KEY, e.target.checked ? '1' : '0');
+              } catch {
+                // Falls back to the default next time.
+              }
+            }}
+          />
+          <span className="toggle-box" />
+          选中文字时自动复制
+        </label>
+        <p className="muted settings-hint">在 PDF 上选中文字，松开鼠标就复制到剪贴板。只想画线、不想覆盖剪贴板时可以关掉。</p>
+      </div>
+    </section>
   );
 }
 

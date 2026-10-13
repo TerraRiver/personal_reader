@@ -26,6 +26,52 @@ export interface OcrProgress {
  */
 export type OcrLine = [string, number, number, number, number, number, number, number, number];
 
+// ---------------------------------------------------------------------------
+// Annotations. Positions are fractions of the page as shown (0..1), like OCR lines.
+
+export type MarkColor = 'yellow' | 'green' | 'blue' | 'pink' | 'red';
+export type MarkStyle = 'highlight' | 'underline' | 'wavy';
+
+/** Highlight / underline / wavy line over selected text. */
+export interface TextMark {
+  id: string;
+  page: number;
+  style: MarkStyle;
+  color: MarkColor;
+  /** One box per line: [x, y, width, height]. */
+  rects: [number, number, number, number][];
+  /** The marked text, for lists and notes later. */
+  text: string;
+  createdAt: number;
+}
+
+export type NumberStampType = 'num-circle' | 'num-square' | 'num-solid';
+export type StampType = 'check' | 'cross' | NumberStampType | 'question' | 'exclaim' | 'star';
+
+export interface Stamp {
+  id: string;
+  page: number;
+  type: StampType;
+  /** Centre of the stamp. */
+  x: number;
+  y: number;
+  /** Side length, as a fraction of the page width (stamps are square). */
+  size: number;
+  /** Number stamps only. */
+  n?: number;
+  /** Missing on stamps made before colors existed: red. */
+  color?: MarkColor;
+  createdAt: number;
+}
+
+export interface Annotations {
+  version: 1;
+  marks: TextMark[];
+  stamps: Stamp[];
+  /** Next number per number style; runs across the whole book. */
+  counters: Record<NumberStampType, number>;
+}
+
 export interface OcrTokenInfo {
   /** 'saved': set in settings; 'dev': from .env or PADDLEOCR_ACCESS_TOKEN. */
   source: 'saved' | 'dev' | null;
@@ -91,6 +137,9 @@ export interface Api {
   startOcr(bookId: string): Promise<void>;
   ocrStatus(): Promise<Record<string, OcrProgress>>;
   loadOcr(bookId: string): Promise<OcrData | null>;
+  /** null until the book has annotations. */
+  listAnnotations(bookId: string): Promise<Annotations | null>;
+  saveAnnotations(bookId: string, annotations: Annotations): Promise<void>;
   /** Where the OCR token comes from, never the token itself. */
   ocrTokenInfo(): Promise<OcrTokenInfo>;
   /** Verifies the token with the service, then stores it encrypted. Resolves to an error message, or null. */
@@ -98,6 +147,8 @@ export interface Api {
   clearOcrToken(): Promise<void>;
   /** Subscribe to OCR progress; returns an unsubscribe. */
   onOcrProgress(fn: (bookId: string, progress: OcrProgress | undefined) => void): () => void;
+  /** ⌘Z / ⌘⇧Z (Ctrl+Z / Ctrl+Y), taken from the keyboard by the main process. */
+  onEditHistory(fn: (action: 'undo' | 'redo') => void): () => void;
   /** Run `fn` before the window closes, waiting for its promise. Returns an unsubscribe. */
   onBeforeClose(fn: () => Promise<unknown>): () => void;
 }

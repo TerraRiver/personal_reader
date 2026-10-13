@@ -19,6 +19,9 @@ interface Props {
   cutPages?: number[];
   /** Hosted OCR lines per page; used as the page's text layer when present. */
   ocrLines?(page: number): OcrLine[] | undefined;
+  /** Layers drawn on the page under / over its text layer, sized in CSS pixels. */
+  underlay?(page: number, width: number, height: number): ReactNode;
+  overlay?(page: number, width: number, height: number): ReactNode;
   onLoad?(doc: PDFDocumentProxy): void;
   /** Extra controls at the start of the toolbar, and a caption in its middle. */
   barStart?: ReactNode;
@@ -32,7 +35,7 @@ const isTyping = (t: EventTarget | null) =>
   t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
 
 const PdfViewer = forwardRef<PdfViewerHandle, Props>(function PdfViewer(
-  { data, initialPage, startPages = [], cutPages = [], ocrLines, onLoad, onPageChange, barStart, barCenter },
+  { data, initialPage, startPages = [], cutPages = [], ocrLines, underlay, overlay, onLoad, onPageChange, barStart, barCenter },
   ref,
 ) {
   const stageRef = useRef<HTMLDivElement>(null);
@@ -266,6 +269,8 @@ const PdfViewer = forwardRef<PdfViewerHandle, Props>(function PdfViewer(
                 cut={isCut}
                 start={isStart}
                 ocr={ocrLines?.(page)}
+                underlay={underlay?.(page, vp.width * scale, vp.height * scale)}
+                overlay={overlay?.(page, vp.width * scale, vp.height * scale)}
               />
             </div>
           )}
@@ -297,9 +302,11 @@ interface PageProps {
   cut: boolean;
   start: boolean;
   ocr?: OcrLine[];
+  underlay?: ReactNode;
+  overlay?: ReactNode;
 }
 
-function PdfPage({ page, scale, dir, width, height, cut, start, ocr }: PageProps) {
+function PdfPage({ page, scale, dir, width, height, cut, start, ocr, underlay, overlay }: PageProps) {
   const sheet = useRef<HTMLDivElement>(null);
   const canvasHost = useRef<HTMLDivElement>(null);
   const textHost = useRef<HTMLDivElement>(null);
@@ -388,7 +395,9 @@ function PdfPage({ page, scale, dir, width, height, cut, start, ocr }: PageProps
       }
     >
       <div className="canvas-host" ref={canvasHost} />
+      {underlay}
       <div className="textLayer" ref={textHost} />
+      {overlay}
       {start && <div className="start-mark">笔记从本页开始</div>}
       {cut && <div className="cut-mark">截断于本页</div>}
     </div>

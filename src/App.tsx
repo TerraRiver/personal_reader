@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { listenForHistory } from './history';
 import Library from './pages/Library';
 import Reader from './pages/Reader';
 import Settings from './pages/Settings';
@@ -8,6 +9,7 @@ type View = { page: 'library' } | { page: 'reader'; bookId: string } | { page: '
 export default function App() {
   const [view, setView] = useState<View>({ page: 'library' });
   const toLibrary = () => setView({ page: 'library' });
+  useEffect(listenForHistory, []);
 
   if (view.page === 'reader') return <Reader key={view.bookId} bookId={view.bookId} onClose={toLibrary} />;
   if (view.page === 'settings') return <Settings onClose={toLibrary} />;

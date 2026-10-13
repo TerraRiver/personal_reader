@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld('api', {
   saveNotes: (bookId, notebook) => ipcRenderer.invoke('notes:save', bookId, notebook),
   listBookmarks: (bookId) => ipcRenderer.invoke('bookmarks:list', bookId),
   saveBookmarks: (bookId, bookmarks) => ipcRenderer.invoke('bookmarks:save', bookId, bookmarks),
+  listAnnotations: (bookId) => ipcRenderer.invoke('annotations:list', bookId),
+  saveAnnotations: (bookId, annotations) => ipcRenderer.invoke('annotations:save', bookId, annotations),
   startOcr: (bookId) => ipcRenderer.invoke('ocr:start', bookId),
   ocrStatus: () => ipcRenderer.invoke('ocr:status'),
   loadOcr: (bookId) => ipcRenderer.invoke('ocr:load', bookId),
@@ -29,6 +31,11 @@ contextBridge.exposeInMainWorld('api', {
     const listener = (_e, bookId, progress) => fn(bookId, progress);
     ipcRenderer.on('ocr:progress', listener);
     return () => ipcRenderer.removeListener('ocr:progress', listener);
+  },
+  onEditHistory: (fn) => {
+    const listener = (_e, action) => fn(action);
+    ipcRenderer.on('edit:history', listener);
+    return () => ipcRenderer.removeListener('edit:history', listener);
   },
   onBeforeClose: (fn) => {
     flushers.add(fn);

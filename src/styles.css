@@ -427,6 +427,7 @@ html:not([data-platform='mac']) .reader-titlebar {
 .pane-pdf {
   flex: 1;
   flex-direction: row;
+  position: relative; /* anchors the toast */
 }
 
 .divider {
@@ -1524,4 +1525,261 @@ html:not([data-platform='mac']) .settings-titlebar {
 }
 .settings-notes li + li {
   margin-top: 4px;
+}
+
+.settings-toggle {
+  font-size: 14px;
+}
+.settings-hint {
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+
+/* ==========================================================================
+   Annotations
+   ========================================================================== */
+
+/* Marks sit between the page image and the text layer. */
+.marks-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  mix-blend-mode: multiply;
+}
+
+.annotation-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+.annotation-overlay > * {
+  pointer-events: auto;
+}
+.stamp-capture {
+  position: absolute;
+  inset: 0;
+  cursor: crosshair;
+}
+
+.stamp {
+  position: absolute;
+  cursor: move;
+  touch-action: none;
+}
+.stamp-glyph {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  mix-blend-mode: multiply;
+  font-family: var(--font);
+}
+.stamp.selected {
+  outline: 1px dashed var(--fg);
+  outline-offset: 3px;
+}
+.stamp-handle {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  background: var(--bg);
+  border: 1px solid var(--fg);
+}
+.stamp-handle.nw { left: -8px; top: -8px; cursor: nwse-resize; }
+.stamp-handle.se { right: -8px; bottom: -8px; cursor: nwse-resize; }
+.stamp-handle.ne { right: -8px; top: -8px; cursor: nesw-resize; }
+.stamp-handle.sw { left: -8px; bottom: -8px; cursor: nesw-resize; }
+.stamp-delete {
+  position: absolute;
+  top: -26px;
+  right: -26px;
+  width: 18px;
+  height: 18px;
+  line-height: 16px;
+  font-size: 14px;
+  background: var(--fg);
+  color: var(--bg);
+}
+.stamp-delete:hover {
+  background: var(--accent);
+}
+.stamp-number {
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  width: 56px;
+  margin: 6px 0 0 -28px;
+  height: 24px;
+  border: 1px solid var(--fg);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  background: var(--bg);
+}
+
+/* Toolbar for a selection or a mark. */
+.mark-bar {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 6px 10px;
+  background: var(--bg);
+  border: 1px solid var(--fg);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+  white-space: nowrap;
+  font-size: 12px;
+  user-select: none;
+}
+.mark-swatches {
+  display: flex;
+  gap: 6px;
+}
+.swatch {
+  width: 16px;
+  height: 16px;
+  border: 1px solid;
+}
+.swatch.active {
+  outline: 2px solid var(--fg);
+  outline-offset: 2px;
+}
+.mark-styles {
+  display: flex;
+  border-left: 1px solid var(--hair);
+  padding-left: 10px;
+  gap: 2px;
+}
+.mark-styles button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 6px;
+}
+.mark-styles button:hover {
+  background: var(--paper);
+}
+.mark-styles button.active {
+  background: var(--fg);
+  color: var(--bg);
+}
+.mark-extra {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-left: 1px solid var(--hair);
+  padding-left: 10px;
+}
+
+/* Stamp palette, dropped from the toolbar. */
+.stamp-anchor {
+  position: relative; /* anchors the palette */
+  display: flex;
+  align-items: center;
+}
+.stamp-palette {
+  position: absolute;
+  top: 30px;
+  left: -12px;
+  z-index: 20;
+  width: 404px;
+  background: var(--bg);
+  border: 1px solid var(--fg);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.14);
+}
+.stamp-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+}
+.stamp-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 6px 10px;
+  border-right: 1px solid var(--hair);
+  border-bottom: 1px solid var(--hair);
+}
+.stamp-cell:nth-child(4n) {
+  border-right: 0;
+}
+.stamp-cell.active {
+  background: var(--paper);
+  box-shadow: inset 0 -3px 0 var(--accent);
+}
+.stamp-pick {
+  width: 40px;
+  height: 40px;
+}
+.stamp-pick:hover {
+  transform: scale(1.08);
+}
+.stamp-name {
+  font-size: 11px;
+  color: var(--muted);
+}
+.stamp-counter {
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+}
+.stamp-counter .icon-btn {
+  width: 20px;
+  height: 20px;
+  font-size: 13px;
+}
+.stamp-counter .count {
+  min-width: 20px;
+  text-align: center;
+  font-weight: 700;
+}
+.stamp-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  font-size: 11px;
+}
+
+.stamp-colors {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 12px);
+  transform: translateX(-50%);
+  display: flex;
+  gap: 5px;
+  padding: 5px 6px;
+  background: var(--bg);
+  border: 1px solid var(--fg);
+  cursor: default;
+}
+.stamp-colors .swatch {
+  width: 13px;
+  height: 13px;
+}
+.stamp-palette-colors {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--hair);
+  font-size: 11px;
+}
+.stamp-palette-tip {
+  margin-left: auto;
+}
+
+.toast {
+  position: absolute;
+  left: 50%;
+  bottom: 28px;
+  z-index: 30;
+  transform: translateX(-50%);
+  padding: 6px 14px;
+  background: var(--fg);
+  color: var(--bg);
+  font-size: 12px;
+  pointer-events: none;
 }

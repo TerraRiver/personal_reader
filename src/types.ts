@@ -58,6 +58,8 @@ export interface Api {
   /** null until the book's bookmarks were first imported from the PDF. */
   listBookmarks(bookId: string): Promise<Bookmark[] | null>;
   saveBookmarks(bookId: string, bookmarks: Bookmark[]): Promise<void>;
+  /** Run `fn` before the window closes, waiting for its promise. Returns an unsubscribe. */
+  onBeforeClose(fn: () => Promise<unknown>): () => void;
 }
 
 declare global {

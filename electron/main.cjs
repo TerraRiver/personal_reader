@@ -20,10 +20,31 @@ const bookFile = (id) => path.join(root(), 'books', `${id}.pdf`);
 const notesFile = (id) => path.join(root(), 'notes', `${id}.json`);
 const bookmarksFile = (id) => path.join(root(), 'bookmarks', `${id}.json`);
 
+// Missing files fall back to the default. A file that exists but can't be parsed
+// is moved aside first, so the next save can never overwrite the only copy.
+// Other read errors propagate, which also blocks the save that would follow.
 async function readJson(file, fallback) {
+  let text;
   try {
-    return JSON.parse(await fs.readFile(file, 'utf8'));
+    text = await fs.readFile(file, 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') return fallback;
+    throw err;
+  }
+  try {
+    return JSON.parse(text);
   } catch {
+    const backup = `${file}.corrupt-${Date.now()}`;
+    await fs.rename(file, backup);
+    // Attached to the window as a sheet, so it never blocks the app.
+    const win = BrowserWindow.getAllWindows()[0];
+    const opts = {
+      type: 'warning',
+      message: '数据文件已损坏',
+      detail: `无法读取 ${path.basename(file)}，原文件已备份为：\n${backup}`,
+    };
+    if (win) dialog.showMessageBox(win, opts);
+    else dialog.showMessageBox(opts);
     return fallback;
   }
 }
@@ -116,6 +137,35 @@ ipcMain.handle('bookmarks:save', (_e, bookId, bookmarks) =>
 );
 
 // ---------- window ----------
+let quitting = false;
+app.on('before-quit', () => (quitting = true));
+
+// Before a window closes, let the page save its debounced edits, then wait for
+// every queued write to land on disk.
+function flushBeforeClose(win) {
+  let flushing = false;
+  let ready = false;
+  win.on('close', (e) => {
+    if (ready) return;
+    e.preventDefault();
+    if (flushing) return;
+    flushing = true;
+    const done = () => {
+      clearTimeout(timer);
+      ipcMain.removeListener('app:flushed', onFlushed);
+      queue.finally(() => {
+        ready = true;
+        win.destroy();
+        if (quitting) app.quit();
+      });
+    };
+    const onFlushed = (ev) => ev.sender === win.webContents && done();
+    const timer = setTimeout(done, 3000); // never let a stuck page keep the window open
+    ipcMain.on('app:flushed', onFlushed);
+    win.webContents.send('app:flush');
+  });
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1440,
@@ -145,6 +195,8 @@ function createWindow() {
       if (/^https?:/.test(url)) shell.openExternal(url);
     }
   });
+
+  flushBeforeClose(win);
 
   if (app.isPackaged || process.env.READER_PROD) {
     win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));

@@ -45,16 +45,30 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
     })();
   }, [bookId]);
 
-  // ----- persist reading position (debounced) -----
+  // ----- persist notes and reading position -----
+  // Writes are debounced, and whatever is still pending is flushed when leaving
+  // the book or closing the window.
+  const pending = useRef<Notebook | null>(null);
+  const pendingPage = useRef<number | null>(null);
+  const flush = useCallback(() => {
+    const writes: Promise<unknown>[] = [];
+    if (pending.current) writes.push(api().saveNotes(bookId, pending.current));
+    if (pendingPage.current !== null) writes.push(api().updateBook(bookId, { lastPage: pendingPage.current }));
+    pending.current = null;
+    pendingPage.current = null;
+    return Promise.all(writes);
+  }, [bookId]);
+  useEffect(() => () => void flush(), [flush]);
+  useEffect(() => api().onBeforeClose(flush), [flush]);
+
   useEffect(() => {
     if (!book) return;
-    const t = setTimeout(() => api().updateBook(bookId, { lastPage: page }), 600);
+    pendingPage.current = page;
+    const t = setTimeout(flush, 600);
     return () => clearTimeout(t);
-  }, [page, bookId, book]);
+  }, [page, book, flush]);
 
-  // ----- persist notes (debounced, flushed on unmount) -----
   // Only user edits mark notes dirty, so loading them never triggers a write.
-  const pending = useRef<Notebook | null>(null);
   const dirty = useRef(false);
   const edit = useCallback((next: Notebook, nextActive?: string | null) => {
     dirty.current = true;
@@ -64,18 +78,9 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
   useEffect(() => {
     if (!dirty.current || !notebook) return;
     pending.current = notebook;
-    const t = setTimeout(() => {
-      if (pending.current) api().saveNotes(bookId, pending.current);
-      pending.current = null;
-    }, 400);
+    const t = setTimeout(flush, 400);
     return () => clearTimeout(t);
-  }, [notebook, bookId]);
-  useEffect(
-    () => () => {
-      if (pending.current) api().saveNotes(bookId, pending.current);
-    },
-    [bookId],
-  );
+  }, [notebook, flush]);
 
   // ----- follow the PDF -----
   const views = useMemo(() => layout(notebook?.segments ?? []), [notebook]);

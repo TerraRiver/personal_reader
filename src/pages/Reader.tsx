@@ -60,11 +60,15 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
     })();
   }, [bookId]);
 
-  // ----- hosted OCR text, reloaded when a run for this book finishes -----
+  // ----- hosted OCR text, reloaded whenever a running OCR saves more pages -----
   useEffect(() => {
-    api().loadOcr(bookId).then(setOcr);
+    let saved = -1;
+    const load = () => api().loadOcr(bookId).then((next) => setOcr((prev) => keepPages(prev, next)));
+    load();
     return api().onOcrProgress((id, p) => {
-      if (id === bookId && p?.state === 'done') api().loadOcr(bookId).then(setOcr);
+      if (id !== bookId || p?.saved == null || p.saved === saved) return;
+      saved = p.saved;
+      load();
     });
   }, [bookId]);
   const ocrLines = useCallback((p: number) => ocr?.pages[p]?.lines, [ocr]);
@@ -487,4 +491,15 @@ function changedPage(a: Annotations, b: Annotations): number | null {
     for (const [id, x] of after) if (!before.has(id)) return x.page;
   }
   return null;
+}
+
+/**
+ * The new OCR data, reusing the line lists of pages already loaded, so pages
+ * on screen aren't redrawn (and a selection on them survives) as more arrive.
+ */
+function keepPages(prev: OcrData | null, next: OcrData | null): OcrData | null {
+  if (!prev || !next) return next;
+  const pages = { ...next.pages };
+  for (const k of Object.keys(pages)) if (prev.pages[k]) pages[k] = prev.pages[k];
+  return { ...next, pages };
 }

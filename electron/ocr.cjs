@@ -24,6 +24,10 @@ const OPTIONS = {
 };
 const MAX_UPLOAD = 45 * 1024 * 1024; // the API takes 50 MB; leave room for multipart overhead
 const MAX_PAGES = 1000;
+// Small chunks make the first pages usable soon after starting; a few are
+// submitted ahead so the service works on them in parallel.
+const CHUNK_PAGES = 30;
+const AHEAD = 3;
 
 // ---------- http ----------
 class OcrError extends Error {
@@ -55,6 +59,7 @@ async function call(url, init, timeout) {
   if (res.status === 401 || res.status === 403) throw new OcrError('令牌无效，请在「设置」中检查访问令牌', { code });
   if (code === 12001) throw new OcrError('今日 OCR 额度已用完，明天再试', { code });
   if (res.status === 429 || code === 12002) throw new OcrError('请求过于频繁', { retry: true, code });
+  if (code === 10010) throw new OcrError('服务端提交队列已满', { retry: true, code });
   if (res.status >= 500) throw new OcrError(`服务暂不可用（${res.status}）`, { retry: true, code });
   if (!res.ok || (code !== 0 && code != null)) throw new OcrError(`请求失败：${msg}`, { code });
   if (!body?.data) throw new OcrError('服务返回格式异常');
@@ -185,18 +190,19 @@ function createOcr(deps) {
     notify(bookId);
   };
 
-  /** Split the book into uploads under the size and page limits. */
+  /** Split the book into chunks of at most CHUNK_PAGES pages, each under the upload limit. */
   async function plan(bytes, knownPages) {
     let total;
     try {
       total = (await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false })).getPageCount();
     } catch (err) {
-      // pdf-lib can't read every PDF. A small enough file is uploaded whole anyway.
-      if (bytes.length > MAX_UPLOAD || !knownPages) throw new OcrError(`无法拆分这个 PDF：${err.message}`);
-      total = knownPages;
+      // pdf-lib can't read every PDF. A small enough file is uploaded whole instead.
+      if (bytes.length > MAX_UPLOAD || !knownPages || knownPages > MAX_PAGES)
+        throw new OcrError(`无法拆分这个 PDF：${err.message}`);
+      return { total: knownPages, chunks: [{ from: 1, to: knownPages }] };
     }
-    if (bytes.length <= MAX_UPLOAD && total <= MAX_PAGES) return { total, chunks: [{ from: 1, to: total }] };
-    const per = Math.max(1, Math.min(MAX_PAGES, Math.floor((total * MAX_UPLOAD * 0.85) / bytes.length)));
+    const bySize = Math.floor((total * MAX_UPLOAD * 0.85) / bytes.length);
+    const per = Math.max(1, Math.min(CHUNK_PAGES, MAX_PAGES, bySize));
     const chunks = [];
     for (let from = 1; from <= total; from += per) chunks.push({ from, to: Math.min(total, from + per - 1) });
     return { total, chunks };
@@ -236,17 +242,25 @@ function createOcr(deps) {
     const getDoc = async () => (src ??= await PDFDocument.load(whole, { ignoreEncryption: true, updateMetadata: false }));
     const doneBefore = (i) => state.chunks.slice(0, i).reduce((s, c) => s + c.to - c.from + 1, 0);
 
-    for (let i = 0; i < state.chunks.length; i++) {
-      if (state.chunks[i].done) continue;
-      report(bookId, { state: 'running', done: doneBefore(i), total: state.total });
+    const saved = () => Object.keys(state.pages).length;
 
-      if (!state.chunks[i].jobId) {
-        const bytes = await chunkBytes(state, i, getDoc, whole); // may split chunk i
+    /** Make sure chunks i .. i + AHEAD - 1 are submitted. Returns false when cancelled. */
+    async function submitAhead(i) {
+      for (let j = i; j < Math.min(state.chunks.length, i + AHEAD); j++) {
+        if (state.chunks[j].done || state.chunks[j].jobId) continue;
+        const bytes = await chunkBytes(state, j, getDoc, whole); // may split chunk j
         const jobId = await withRetry(() => submit(token, bytes));
-        if (cancelled.has(bookId)) return;
-        state.chunks[i].jobId = jobId;
+        if (cancelled.has(bookId)) return false;
+        state.chunks[j].jobId = jobId;
         await writeJson(ocrFile(bookId), state); // a restart resumes polling this job
       }
+      return true;
+    }
+
+    for (let i = 0; i < state.chunks.length; i++) {
+      if (state.chunks[i].done) continue;
+      report(bookId, { state: 'running', done: doneBefore(i), total: state.total, saved: saved() });
+      if (!(await submitAhead(i))) return;
       const c = state.chunks[i];
 
       let wait = 3000;
@@ -275,10 +289,17 @@ function createOcr(deps) {
           Object.assign(state.pages, parseChunk(records, c.from));
           c.done = true;
           await writeJson(ocrFile(bookId), state);
+          // Readers pick up the new pages right away.
+          report(bookId, { state: 'running', done: doneBefore(i + 1), total: state.total, saved: saved() });
           break;
         }
         const ep = data.extractProgress;
-        report(bookId, { state: 'running', done: doneBefore(i) + (ep?.extractedPages ?? 0), total: state.total });
+        report(bookId, {
+          state: 'running',
+          done: doneBefore(i) + (ep?.extractedPages ?? 0),
+          total: state.total,
+          saved: saved(),
+        });
         await sleep(wait);
         wait = Math.min(15_000, wait * 1.5);
       }
@@ -288,7 +309,7 @@ function createOcr(deps) {
     state.finishedAt = Date.now();
     await writeJson(ocrFile(bookId), state);
     await updateBook(bookId, { ocr: { state: 'done', model: MODEL, at: state.finishedAt } });
-    report(bookId, { state: 'done', done: state.total, total: state.total });
+    report(bookId, { state: 'done', done: state.total, total: state.total, saved: saved() });
   }
 
   async function pump() {

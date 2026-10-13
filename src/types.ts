@@ -17,6 +17,8 @@ export interface OcrProgress {
   state: 'queued' | 'running' | 'done' | 'failed';
   done?: number;
   total?: number;
+  /** Pages whose results are on disk; grows chunk by chunk. */
+  saved?: number;
   error?: string;
 }
 

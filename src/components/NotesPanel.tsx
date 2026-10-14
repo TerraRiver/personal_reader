@@ -34,7 +34,7 @@ interface Props {
   onUpdateBook(patch: Partial<Book>): void;
 }
 
-type Overlay = 'index' | 'trash' | null;
+type Overlay = 'index' | 'trash' | 'free' | null;
 type Mode = 'source' | 'preview';
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -76,14 +76,17 @@ export default function NotesPanel(props: Props) {
   // ----- citations: [p n] with the page number printed in the book -----
   const { book, onUpdateBook } = props;
   const textRef = useRef<HTMLTextAreaElement>(null);
+  const freeRef = useRef<HTMLTextAreaElement>(null);
+  // Citations go into the free note while it's open, otherwise into the page note.
+  const citeRef = overlay === 'free' ? freeRef : textRef;
   const caret = useRef({ start: 0, end: 0 });
   const [askStart, setAskStart] = useState<'insert' | 'edit' | null>(null);
   const [frontHint, setFrontHint] = useState(false);
-  const canCite = !!view && mode === 'source';
+  const canCite = mode === 'source' && (overlay === 'free' || !!view);
   const printed = book.bodyStart ? printedPage(currentPage, book.bodyStart) : undefined;
 
   const insertCitation = (bodyStart: number) => {
-    const el = textRef.current;
+    const el = citeRef.current;
     if (!el) return;
     const n = printedPage(currentPage, bodyStart);
     el.focus();
@@ -99,7 +102,7 @@ export default function NotesPanel(props: Props) {
   };
 
   const cite = () => {
-    const el = textRef.current;
+    const el = citeRef.current;
     if (!el) return;
     caret.current = { start: el.selectionStart, end: el.selectionEnd };
     if (book.bodyStart) insertCitation(book.bodyStart);
@@ -117,6 +120,13 @@ export default function NotesPanel(props: Props) {
           </button>
           <button className={`link${overlay === 'trash' ? ' on' : ''}`} onClick={() => toggle('trash')}>
             废纸篓<span className="count-badge">{pad(notebook.trash.length)}</span>
+          </button>
+          <button
+            className={`link${overlay === 'free' ? ' on' : ''}`}
+            onClick={() => toggle('free')}
+            title="这本书的自由笔记，不和页码绑定"
+          >
+            自由写{notebook.free?.content.trim() && <span className="free-dot" />}
           </button>
         </div>
         <div className="bar-right">
@@ -170,7 +180,7 @@ export default function NotesPanel(props: Props) {
           onMouseDown={(e) => e.preventDefault()} // keep the caret in the note
           onClick={cite}
           title={
-            !view
+            !canCite && mode === 'source'
               ? '打开一篇笔记后可以插入引注'
               : mode === 'source'
                 ? '在光标处插入当前页的引注 [p 页码]'
@@ -227,19 +237,19 @@ export default function NotesPanel(props: Props) {
           inserting={askStart === 'insert'}
           onCancel={() => {
             setAskStart(null);
-            textRef.current?.focus();
+            citeRef.current?.focus();
           }}
           onConfirm={(start) => {
             onUpdateBook({ bodyStart: start });
             const insert = askStart === 'insert';
             setAskStart(null);
             if (insert) insertCitation(start);
-            else textRef.current?.focus();
+            else citeRef.current?.focus();
           }}
         />
       )}
 
-      {here.length > 1 && (
+      {here.length > 1 && overlay !== 'free' && (
         <div className="switcher">
           <span className="muted">本页有 {here.length} 篇笔记</span>
           {here.map((v) => (
@@ -278,6 +288,7 @@ export default function NotesPanel(props: Props) {
           />
         )}
         {overlay === 'trash' && <Trash {...props} onRestored={() => setOverlay(null)} />}
+        {overlay === 'free' && <FreeNote {...props} mode={mode} setMode={setMode} textRef={freeRef} />}
       </div>
     </div>
   );
@@ -316,15 +327,7 @@ function NoteEditor({
       segments: notebook.segments.map((s) => (s.id === seg.id ? { ...s, content, updatedAt: Date.now() } : s)),
     });
 
-  // Tab inserts spaces instead of moving focus.
-  const onTextKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key !== 'Tab') return;
-    e.preventDefault();
-    const el = e.currentTarget;
-    const { selectionStart: s, selectionEnd: end, value } = el;
-    setContent(value.slice(0, s) + '  ' + value.slice(end));
-    requestAnimationFrame(() => el.setSelectionRange(s + 2, s + 2));
-  };
+  const onTextKey = tabInserts(setContent);
 
   return (
     <div className="editor">
@@ -364,6 +367,74 @@ function NoteEditor({
         <button className="link" onClick={() => onEdit(deleteNote(notebook, seg.id), null)} title="移入废纸篓">
           删除笔记
         </button>
+      </div>
+    </div>
+  );
+}
+
+/** Tab inserts spaces instead of moving focus. */
+const tabInserts = (setContent: (content: string) => void) => (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  if (e.key !== 'Tab') return;
+  e.preventDefault();
+  const el = e.currentTarget;
+  const { selectionStart: s, selectionEnd: end, value } = el;
+  setContent(value.slice(0, s) + '  ' + value.slice(end));
+  requestAnimationFrame(() => el.setSelectionRange(s + 2, s + 2));
+};
+
+// ---------------------------------------------------------------------------
+
+/** The book's free note: one per book, not bound to pages, over the note stage. */
+function FreeNote({
+  notebook,
+  mode,
+  setMode,
+  onEdit,
+  onGoTo,
+  book,
+  textRef,
+}: Props & { mode: Mode; setMode(m: Mode): void; textRef: React.RefObject<HTMLTextAreaElement | null> }) {
+  const content = notebook.free?.content ?? '';
+  const setContent = (next: string) => onEdit({ ...notebook, free: { content: next, updatedAt: Date.now() } });
+
+  useEffect(() => {
+    const el = textRef.current;
+    if (mode !== 'source' || !el) return;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  }, [mode, textRef]);
+
+  return (
+    <div className="overlay free-note">
+      <div className="notes-heading">
+        <h2>自由写</h2>
+        <span className="muted free-sub">整本书一篇，不跟页码走</span>
+      </div>
+      <div className="editor-body">
+        {mode === 'source' ? (
+          <textarea
+            ref={textRef}
+            className="source"
+            spellCheck={false}
+            value={content}
+            placeholder={'随手记下关于整本书的想法：读后感、提纲、问题……\n\n支持 Markdown，⌘E 预览；「插入引注」可以引用当前页。'}
+            onChange={(e) => setContent(e.target.value)}
+            onKeyDown={tabInserts(setContent)}
+          />
+        ) : (
+          <div className="markdown" onDoubleClick={() => setMode('source')}>
+            {content.trim() ? (
+              <Markdown content={content} onGoTo={onGoTo} bodyStart={book.bodyStart} />
+            ) : (
+              <p className="muted">还没有内容，双击开始写。</p>
+            )}
+          </div>
+        )}
+      </div>
+      <div className="editor-foot">
+        <span className="muted">
+          {notebook.free ? `编辑于 ${new Date(notebook.free.updatedAt).toLocaleString('zh-CN')}` : '尚未保存'}
+        </span>
       </div>
     </div>
   );

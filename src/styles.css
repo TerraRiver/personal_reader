@@ -1921,3 +1921,31 @@ html:not([data-platform='mac']) .settings-titlebar {
   background: var(--paper);
   transform: none;
 }
+
+/* ----- free note ----- */
+
+.free-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: middle;
+}
+.overlay.free-note {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+.free-note .notes-heading {
+  flex: none;
+  margin: 0 20px;
+}
+.free-sub {
+  font-size: 12px;
+}
+.free-note .source::placeholder {
+  color: var(--muted);
+}

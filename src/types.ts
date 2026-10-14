@@ -129,6 +129,8 @@ export interface Notebook {
   version: 3;
   segments: Segment[];
   trash: TrashItem[];
+  /** One free-form note per book, not bound to any page. */
+  free?: { content: string; updatedAt: number };
 }
 
 export interface Api {

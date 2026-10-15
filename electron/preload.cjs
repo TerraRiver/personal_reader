@@ -31,6 +31,19 @@ contextBridge.exposeInMainWorld('api', {
   ocrTokenInfo: () => ipcRenderer.invoke('settings:ocrToken'),
   saveOcrToken: (token) => ipcRenderer.invoke('settings:saveOcrToken', token),
   clearOcrToken: () => ipcRenderer.invoke('settings:clearOcrToken'),
+  startTranslation: (bookId) => ipcRenderer.invoke('translate:start', bookId),
+  translationStatus: () => ipcRenderer.invoke('translate:status'),
+  loadTranslation: (bookId) => ipcRenderer.invoke('translate:load', bookId),
+  editTranslation: (bookId, id, text) => ipcRenderer.invoke('translate:edit', bookId, id, text),
+  retranslatePiece: (bookId, id) => ipcRenderer.invoke('translate:retranslate', bookId, id),
+  translateInfo: () => ipcRenderer.invoke('settings:translateInfo'),
+  saveTranslateSettings: (patch) => ipcRenderer.invoke('settings:saveTranslate', patch),
+  checkTranslateSettings: (which, draft) => ipcRenderer.invoke('settings:checkTranslate', which, draft),
+  onTranslationProgress: (fn) => {
+    const listener = (_e, bookId, progress) => fn(bookId, progress);
+    ipcRenderer.on('translate:progress', listener);
+    return () => ipcRenderer.removeListener('translate:progress', listener);
+  },
   onOcrProgress: (fn) => {
     const listener = (_e, bookId, progress) => fn(bookId, progress);
     ipcRenderer.on('ocr:progress', listener);

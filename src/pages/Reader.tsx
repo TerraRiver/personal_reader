@@ -8,7 +8,11 @@ import {
   type MarkColor,
   type Notebook,
   type OcrData,
+  type PaperBlock,
+  type PaperTranslation,
   type StampType,
+  type TranslatedPiece,
+  type TranslationProgress,
 } from '../types';
 import { STAMP_SIZE, autoCopyEnabled, isNumberStamp, normalizeAnnotations } from '../annotations';
 import { AnnotationOverlay, MarksUnderlay } from '../components/Annotations';
@@ -19,12 +23,15 @@ import { type NoteView, layout, noteForPage, normalizeNotebook } from '../notes'
 import PdfViewer, { type PdfViewerHandle } from '../components/PdfViewer';
 import NotesPanel from '../components/NotesPanel';
 import BookmarksPanel, { currentBookmark } from '../components/BookmarksPanel';
+import TranslationPanel from '../components/TranslationPanel';
 import { isMod, shortcut } from '../platform';
 
 const SPLIT_KEY = 'reader.split';
 const FOLLOW_KEY = 'reader.follow';
 const BOOKMARKS_KEY = 'reader.bookmarks';
 const STAMP_COLOR_KEY = 'reader.stampColor';
+const LEFT_PANE_KEY = 'reader.leftPane';
+const TRANSLATION_FOLLOW_KEY = 'reader.translationFollow';
 
 export default function Reader({ bookId, onClose }: { bookId: string; onClose(): void }) {
   const [book, setBook] = useState<Book | null>(null);
@@ -72,6 +79,44 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
     });
   }, [bookId]);
   const ocrLines = useCallback((p: number) => ocr?.pages[p]?.lines, [ocr]);
+
+  // ----- paper translation, reloaded as a running translation saves more -----
+  const isPaper = book?.kind === 'paper';
+  const [leftPane, setLeftPane] = useState<'notes' | 'translation'>(() =>
+    localStorage.getItem(LEFT_PANE_KEY) === 'translation' ? 'translation' : 'notes',
+  );
+  const pane = isPaper ? leftPane : 'notes';
+  const [translation, setTranslation] = useState<PaperTranslation | null>(null);
+  const [tProgress, setTProgress] = useState<TranslationProgress | undefined>();
+  const [tFollow, setTFollow] = useState(() => localStorage.getItem(TRANSLATION_FOLLOW_KEY) !== '0');
+  const [picked, setPicked] = useState<PaperBlock | null>(null);
+  useEffect(() => {
+    if (!isPaper) return;
+    const load = () => api().loadTranslation(bookId).then(setTranslation);
+    load();
+    api().translationStatus().then((all) => setTProgress(all[bookId]));
+    return api().onTranslationProgress((id, p) => {
+      if (id !== bookId) return;
+      setTProgress(p);
+      load();
+      if (p?.state === 'done' || p?.state === 'failed')
+        api().listBooks().then((books) => setBook((b) => books.find((x) => x.id === bookId) ?? b));
+    });
+  }, [bookId, isPaper]);
+  const showPane = (next: 'notes' | 'translation') => {
+    // Clicking the pane that's showing hides it.
+    if (showNotes && pane === next) return setShowNotes(false);
+    setShowNotes(true);
+    setLeftPane(next);
+    localStorage.setItem(LEFT_PANE_KEY, next);
+  };
+  const pickBlock = useCallback((b: PaperBlock) => {
+    setPicked(b);
+    viewer.current?.goTo(b.parts[0].page);
+  }, []);
+  const changePiece = useCallback((id: string, piece: TranslatedPiece) => {
+    setTranslation((t) => (t ? { ...t, pieces: { ...t.pieces, [id]: piece } } : t));
+  }, []);
 
   // ----- annotations (saved right away, like bookmarks) -----
   const [annotations, setAnnotations] = useState<Annotations | null>(null);
@@ -182,7 +227,22 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
     [annotations],
   );
 
-  const overlay = useCallback(
+  // The translated block picked last, outlined on its page(s); boxes are on a 0–1000 grid.
+  const pickedBoxes = useCallback(
+    (p: number, w: number, h: number) =>
+      picked?.parts
+        .filter((part) => part.page === p)
+        .map(({ bbox: [x0, y0, x1, y1] }, i) => (
+          <div
+            key={`pick${i}`}
+            className="picked-block"
+            style={{ left: (x0 / 1000) * w, top: (y0 / 1000) * h, width: ((x1 - x0) / 1000) * w, height: ((y1 - y0) / 1000) * h }}
+          />
+        )),
+    [picked],
+  );
+
+  const annotationOverlay = useCallback(
     (p: number, w: number, h: number) =>
       annotations && (
         <AnnotationOverlay
@@ -247,6 +307,15 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
         />
       ),
     [annotations, placing, stampColor, autoCopy, changeAnnotations],
+  );
+  const overlay = useCallback(
+    (p: number, w: number, h: number) => (
+      <>
+        {annotationOverlay(p, w, h)}
+        {pane === 'translation' && pickedBoxes(p, w, h)}
+      </>
+    ),
+    [annotationOverlay, pickedBoxes, pane],
   );
 
   // ----- persist notes and reading position -----
@@ -416,13 +485,48 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
           ← {book?.kind === 'paper' ? '论文库' : '书库'}
         </button>
         <div className="reader-title">{book?.title}</div>
-        <button className="link" onClick={() => setShowNotes((s) => !s)} title={shortcut('\\')}>
-          {showNotes ? '隐藏笔记' : '显示笔记'}
-        </button>
+        {isPaper ? (
+          <div className="pane-switch">
+            <button className={`link${showNotes && pane === 'notes' ? ' on' : ''}`} onClick={() => showPane('notes')}>
+              笔记
+            </button>
+            <button
+              className={`link${showNotes && pane === 'translation' ? ' on' : ''}`}
+              onClick={() => showPane('translation')}
+            >
+              译文
+            </button>
+          </div>
+        ) : (
+          <button className="link" onClick={() => setShowNotes((s) => !s)} title={shortcut('\\')}>
+            {showNotes ? '隐藏笔记' : '显示笔记'}
+          </button>
+        )}
       </div>
 
       <div className="reader-body" ref={body}>
-        {showNotes && notebook && book && (
+        {showNotes && book && pane === 'translation' && (
+          <>
+            <section className="pane pane-notes" style={{ width: `${split * 100}%` }}>
+              <TranslationPanel
+                book={book}
+                translation={translation}
+                progress={tProgress}
+                currentPage={page}
+                follow={tFollow}
+                onFollowChange={(f) => {
+                  setTFollow(f);
+                  localStorage.setItem(TRANSLATION_FOLLOW_KEY, f ? '1' : '0');
+                }}
+                selected={picked?.id ?? null}
+                onSelect={pickBlock}
+                onPiece={changePiece}
+              />
+            </section>
+            <div className="divider" onPointerDown={startDrag} />
+          </>
+        )}
+        {showNotes && notebook && book && pane === 'notes' && (
           <>
             <section className="pane pane-notes" style={{ width: `${split * 100}%` }}>
               <NotesPanel

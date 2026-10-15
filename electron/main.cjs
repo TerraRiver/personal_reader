@@ -3,6 +3,7 @@ const path = require('node:path');
 const fs = require('node:fs/promises');
 const crypto = require('node:crypto');
 const { createOcr, checkToken } = require('./ocr.cjs');
+const { createTranslator, checkMineru, checkLlm } = require('./translate.cjs');
 const createSettings = require('./settings.cjs');
 
 const DEV_URL = 'http://localhost:5173';
@@ -17,6 +18,7 @@ if (process.env.READER_DATA_DIR) app.setPath('userData', process.env.READER_DATA
 // <userData>/library/bookmarks/<id>.json bookmarks of one book
 // <userData>/library/ocr/<id>.json       hosted OCR results of one book
 // <userData>/library/annotations/<id>.json  highlights and stamps of one book
+// <userData>/library/translations/<id>.json paper translation: parsed blocks and their translations
 
 const root = () => path.join(app.getPath('userData'), 'library');
 const libraryFile = () => path.join(root(), 'library.json');
@@ -25,6 +27,7 @@ const notesFile = (id) => path.join(root(), 'notes', `${id}.json`);
 const bookmarksFile = (id) => path.join(root(), 'bookmarks', `${id}.json`);
 const ocrFile = (id) => path.join(root(), 'ocr', `${id}.json`);
 const annotationsFile = (id) => path.join(root(), 'annotations', `${id}.json`);
+const translationFile = (id) => path.join(root(), 'translations', `${id}.json`);
 
 // Missing files fall back to the default. A file that exists but can't be parsed
 // is moved aside first, so the next save can never overwrite the only copy.
@@ -130,6 +133,16 @@ const ocr = createOcr({
   updateBook,
 });
 
+const translator = createTranslator({
+  getConfig: () => settings.translateConfig(),
+  translationFile,
+  bookFile,
+  readJson,
+  writeJson,
+  getBook: async (id) => (await loadBooks()).find((b) => b.id === id),
+  updateBook,
+});
+
 // ---------- ipc ----------
 ipcMain.handle('library:list', () => loadBooks());
 
@@ -150,6 +163,7 @@ ipcMain.handle('library:update', (_e, id, patch) => updateBook(id, patch));
 
 ipcMain.handle('library:remove', (_e, id) => {
   ocr.cancel(id);
+  translator.cancel(id);
   return serial(async () => {
     const books = (await loadBooks()).filter((b) => b.id !== id);
     await saveBooks(books);
@@ -158,6 +172,7 @@ ipcMain.handle('library:remove', (_e, id) => {
     await fs.rm(bookmarksFile(id), { force: true });
     await fs.rm(ocrFile(id), { force: true });
     await fs.rm(annotationsFile(id), { force: true });
+    await fs.rm(translationFile(id), { force: true });
     return books;
   });
 });
@@ -233,6 +248,32 @@ ipcMain.handle('settings:saveOcrToken', async (_e, token) => {
   }
 });
 ipcMain.handle('settings:clearOcrToken', () => settings.clearOcrToken());
+
+ipcMain.handle('translate:start', (_e, bookId) => translator.start(bookId));
+ipcMain.handle('translate:status', () => translator.status());
+ipcMain.handle('translate:load', (_e, bookId) => translator.load(bookId));
+ipcMain.handle('translate:edit', (_e, bookId, id, text) => translator.edit(bookId, id, text));
+// Resolves to { piece } or { error }, so the message reaches the page intact.
+ipcMain.handle('translate:retranslate', (_e, bookId, id) =>
+  translator.retranslate(bookId, id).then((piece) => ({ piece }), (err) => ({ error: err.message })),
+);
+ipcMain.handle('settings:translateInfo', () => settings.translateInfo());
+ipcMain.handle('settings:saveTranslate', async (_e, patch) => {
+  try {
+    await settings.saveTranslate(patch);
+    return null;
+  } catch (err) {
+    return err.message;
+  }
+});
+// Checks the saved settings, or `draft` values typed but not saved yet. Resolves to an error message, or null.
+ipcMain.handle('settings:checkTranslate', async (_e, which, draft = {}) => {
+  const saved = await settings.translateConfig();
+  const cfg = { ...saved, ...Object.fromEntries(Object.entries(draft).filter(([, v]) => v)) };
+  if (which === 'mineru') return cfg.mineruKey ? checkMineru(cfg.mineruKey) : '请先填写 MinerU 密钥';
+  if (!cfg.llmBaseUrl || !cfg.llmModel || !cfg.llmKey) return '请先填写接口地址、模型和密钥';
+  return checkLlm(cfg);
+});
 
 // ---------- window ----------
 let quitting = false;
@@ -320,7 +361,10 @@ app.whenReady().then(() => {
   // Packaged builds get the icon from the bundle; show it in the Dock during development too.
   if (!app.isPackaged) app.dock?.setIcon(path.join(__dirname, '..', 'build', 'icon.png'));
   createWindow();
-  loadBooks().then((books) => ocr.resume(books));
+  loadBooks().then((books) => {
+    ocr.resume(books);
+    translator.resume(books);
+  });
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

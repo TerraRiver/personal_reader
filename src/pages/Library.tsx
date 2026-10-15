@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, type Book, type Folder, type OcrProgress, type ShelfKind, type TextLayerKind } from '../types';
+import { api, type Book, type Folder, type OcrProgress, type ShelfKind, type TextLayerKind, type TranslationProgress } from '../types';
 import { analyzeBook } from '../pdf';
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -86,6 +86,41 @@ function TextCell({
         </button>
       )}
     </>
+  );
+}
+
+/** The paper translation column: start it, or how far it got. */
+function TranslateCell({ book, live, onOpen }: { book: Book; live?: TranslationProgress; onOpen(): void }) {
+  const start = () => api().startTranslation(book.id);
+  if (live?.state === 'queued') return <span className="muted">等待翻译…</span>;
+  if (live?.state === 'parsing')
+    return <span className="muted ocr-progress">解析中 {live.total ? `${live.done ?? 0}/${live.total}` : '…'}</span>;
+  if (live?.state === 'translating')
+    return <span className="muted ocr-progress">翻译中 {live.done ?? 0}/{live.total ?? '…'}</span>;
+  if (!live && book.translation?.state === 'running') return <span className="muted">翻译中…</span>;
+  if (live?.state === 'done' || (book.translation?.state === 'done' && live?.state !== 'failed'))
+    return (
+      <button className="tag tag-ocr tag-button" onClick={onOpen} title="打开阅读器查看译文">
+        已翻译
+      </button>
+    );
+  if (live?.state === 'failed' || book.translation?.state === 'failed') {
+    const error = live?.error ?? book.translation?.error ?? '';
+    return (
+      <>
+        <span className="ocr-failed" title={error}>
+          翻译失败
+        </span>
+        <button className="link small" onClick={start} title={`${error}\n从中断处继续`}>
+          重试
+        </button>
+      </>
+    );
+  }
+  return (
+    <button className="link small" onClick={start} title="MinerU 解析版面，大模型逐段翻译成中文">
+      翻译
+    </button>
   );
 }
 
@@ -295,6 +330,16 @@ export default function Library({
       .catch(() => setFailed((f) => [...f, next.id]));
   }, [books]);
 
+  // Paper translations: live progress from the main process.
+  const [translating, setTranslating] = useState<Record<string, TranslationProgress>>({});
+  useEffect(() => {
+    api().translationStatus().then(setTranslating);
+    return api().onTranslationProgress((id, p) => {
+      setTranslating(({ [id]: _, ...rest }) => (p ? { ...rest, [id]: p } : rest));
+      if (p?.state === 'done' || p?.state === 'failed') api().listBooks().then(setBooks);
+    });
+  }, []);
+
   // Hosted OCR runs: live progress from the main process.
   const [ocr, setOcr] = useState<Record<string, OcrProgress>>({});
   const [hasToken, setHasToken] = useState(true);
@@ -415,7 +460,7 @@ export default function Library({
               <th>{isPaper ? '标题' : '书名'}</th>
               <th className="col-num">页数</th>
               <th className="col-tag">文字</th>
-              {!isPaper && <th className="col-tag">书签</th>}
+              {isPaper ? <th className="col-tag">译文</th> : <th className="col-tag">书签</th>}
               <th className="col-progress">进度</th>
               <th className="col-date">上次阅读</th>
               <th className="col-actions" />
@@ -465,6 +510,19 @@ export default function Library({
                       onOpenSettings={onOpenSettings}
                     />
                   </td>
+                  {isPaper && (
+                    <td className="col-tag" onClick={(e) => e.stopPropagation()}>
+                      <TranslateCell
+                        book={b}
+                        live={translating[b.id]}
+                        onOpen={() => {
+                          // Open straight onto the translation.
+                          localStorage.setItem('reader.leftPane', 'translation');
+                          onOpen(b.id);
+                        }}
+                      />
+                    </td>
+                  )}
                   {!isPaper && <td className="col-tag">
                     {b.bookmarkCount === undefined ? (
                       <span className="muted">—</span>

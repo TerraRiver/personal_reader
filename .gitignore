@@ -3,3 +3,6 @@ dist
 release
 .DS_Store
 .env
+
+# Translation experiments: test papers, parse results, scripts
+translate-lab/

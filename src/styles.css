@@ -2084,3 +2084,331 @@ html:not([data-platform='mac']) .settings-titlebar {
 .free-note .source::placeholder {
   color: var(--muted);
 }
+/* ==========================================================================
+   Paper translation
+   ========================================================================== */
+
+.pane-switch {
+  justify-self: end;
+  display: flex;
+  gap: 18px;
+  -webkit-app-region: no-drag;
+}
+
+.translation {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.pane-title {
+  font-weight: 700;
+}
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+.translation-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.translation-progress .progress {
+  display: inline-block;
+  width: 80px;
+  height: 2px;
+  background: var(--hair);
+}
+.translation-progress .progress-bar {
+  background: var(--accent);
+}
+
+.translation-body {
+  flex: 1;
+  overflow: auto;
+  padding: 20px 24px 50vh;
+  font-size: 15px;
+  line-height: 1.75;
+  user-select: text;
+}
+.translation-empty {
+  margin: 40px 0;
+  max-width: 30em;
+}
+.translation-empty p {
+  margin: 0 0 10px;
+}
+.translation-empty .btn {
+  margin: 10px 0 14px;
+}
+.translation-empty .small-print {
+  font-size: 12px;
+}
+.translation-alert {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  margin: 0 0 16px;
+  font-size: 13px;
+}
+.translation-end {
+  text-align: center;
+  font-size: 12px;
+  margin-top: 32px;
+}
+
+.glossary {
+  margin: 0 0 20px;
+  padding: 8px 0;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--hair);
+  font-size: 12px;
+}
+.glossary summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.glossary dl {
+  margin: 10px 0 4px;
+  columns: 2;
+  column-gap: 24px;
+}
+.glossary dl div {
+  display: flex;
+  gap: 8px;
+  break-inside: avoid;
+  line-height: 1.6;
+}
+.glossary dt {
+  color: var(--muted);
+}
+.glossary dd {
+  margin: 0;
+}
+
+/* One block of the paper. */
+.tblock {
+  position: relative;
+  margin: 0 -10px 14px;
+  padding: 2px 10px;
+  border-left: 2px solid transparent;
+  cursor: pointer;
+}
+.tblock:hover {
+  background: #fafaf8;
+}
+.tblock.on {
+  border-left-color: var(--accent);
+  background: #fff8e5;
+}
+.tblock p {
+  margin: 0;
+}
+.tblock p + p {
+  margin-top: 0.6em;
+}
+.tblock h3,
+.tblock h4 {
+  margin: 1.4em 0 0.2em;
+  font-weight: 700;
+  line-height: 1.35;
+}
+.tblock h3 {
+  font-size: 20px;
+}
+.tblock h4 {
+  font-size: 16px;
+}
+.tblock sup {
+  line-height: 0;
+  font-size: 0.7em;
+  color: var(--accent);
+}
+.tblock ul {
+  margin: 0;
+  padding-left: 1.4em;
+}
+.tblock-quote {
+  padding-left: 2.4em;
+  font-size: 14px;
+}
+.tblock-note,
+.tblock-ref {
+  font-size: 13px;
+  line-height: 1.6;
+}
+.tblock-ref {
+  color: #444;
+  padding-left: calc(10px + 2em);
+  text-indent: -2em;
+}
+.tblock .caption {
+  font-size: 13px;
+  color: #333;
+}
+.tblock .table {
+  overflow-x: auto;
+  margin: 6px 0;
+}
+.tblock table {
+  border-collapse: collapse;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.tblock td,
+.tblock th {
+  border: 1px solid var(--hair);
+  padding: 3px 6px;
+  vertical-align: top;
+}
+.tblock .math {
+  overflow-x: auto;
+}
+.figure-link {
+  margin: 4px 0;
+}
+.pending {
+  color: var(--muted);
+  font-size: 13px;
+}
+/* The English, when "原文" is on, and above the editor. */
+.original {
+  margin-top: 4px;
+  font-family: 'Times New Roman', Times, serif;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.tblock-tags {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  margin-top: 4px;
+  font-size: 11px;
+}
+.tblock-actions {
+  position: absolute;
+  top: -10px;
+  right: 6px;
+  display: none;
+  gap: 12px;
+  padding: 0 8px;
+  background: var(--bg);
+  border: 1px solid var(--hair);
+}
+.tblock:hover .tblock-actions {
+  display: flex;
+}
+
+.tedit {
+  cursor: auto;
+}
+.tedit .original {
+  margin: 0 0 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--hair);
+}
+.tedit textarea {
+  display: block;
+  width: 100%;
+  resize: none;
+  overflow: hidden;
+  border: 1px solid var(--fg);
+  padding: 8px 10px;
+  font: inherit;
+  line-height: 1.7;
+  outline: none;
+  background: var(--bg);
+}
+.tedit textarea:focus {
+  border-color: var(--accent);
+}
+.tedit-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  margin-top: 8px;
+  font-size: 11px;
+}
+.tedit-bar .muted {
+  margin-right: auto;
+}
+
+/* The picked paragraph, outlined on the PDF page. */
+.picked-block {
+  position: absolute;
+  border: 2px solid var(--accent);
+  background: rgba(228, 0, 43, 0.06);
+  pointer-events: none;
+  z-index: 3;
+}
+
+.tag-button {
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+
+/* ----- settings ----- */
+.translate-group {
+  padding: 4px 0 28px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--hair);
+}
+.translate-group h3 {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 700;
+}
+.translate-help {
+  margin: 0 0 16px;
+  font-size: 13px;
+  max-width: 40em;
+}
+.translate-fields {
+  display: grid;
+  gap: 14px;
+  max-width: 620px;
+}
+.translate-field {
+  display: grid;
+  grid-template-columns: 80px 1fr auto;
+  align-items: center;
+  gap: 16px;
+}
+.translate-field .settings-kicker {
+  margin: 0;
+}
+.translate-field input,
+.translate-field select {
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid var(--fg);
+  outline: none;
+  font-family: var(--mono);
+  font-size: 13px;
+  background: none;
+  min-width: 0;
+}
+.translate-field input.narrow {
+  width: 80px;
+}
+.translate-field input:focus,
+.translate-field select:focus {
+  border-bottom-color: var(--accent);
+}
+.translate-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 18px;
+}
+.translate-actions .token-ok,
+.translate-actions .error {
+  margin: 0;
+  font-size: 12px;
+}

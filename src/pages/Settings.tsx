@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, type OcrTokenInfo } from '../types';
+import { api, type OcrTokenInfo, type TranslateField, type TranslateInfo } from '../types';
 import { AUTO_COPY_KEY, autoCopyEnabled } from '../annotations';
 
 const TOKEN_PAGE = 'https://aistudio.baidu.com/account/accessToken';
@@ -19,6 +19,7 @@ export default function Settings({ onClose }: { onClose(): void }) {
 
       <ReadingSection />
       <OcrTokenSection />
+      <TranslateSection />
     </div>
   );
 }
@@ -193,5 +194,174 @@ function OcrTokenSection() {
         </ul>
       </div>
     </section>
+  );
+}
+
+const MINERU_PAGE = 'https://mineru.net/apiManage';
+
+type Draft = Partial<Record<TranslateField, string>>;
+
+/** Where a value comes from, beside its field. */
+function Source({ info }: { info?: { source: 'saved' | 'dev' | null } }) {
+  if (info?.source === 'saved') return <span className="tag tag-ocr">已保存</span>;
+  if (info?.source === 'dev') return <span className="tag" title="来自 .env，在这里保存后优先使用保存的值">开发配置</span>;
+  return <span className="tag tag-none">未设置</span>;
+}
+
+function TranslateSection() {
+  const [info, setInfo] = useState<TranslateInfo | null>(null);
+  const refresh = () => api().translateInfo().then(setInfo);
+  useEffect(() => {
+    refresh();
+  }, []);
+
+  return (
+    <section className="settings-section">
+      <div className="settings-label">
+        <h2>论文翻译</h2>
+        <p className="muted">MinerU · OpenAI 兼容接口</p>
+        <p className="muted">
+          论文库里的论文可以整篇译成中文：MinerU 先解析版面（正文、标题、脚注、参考文献），再由你配置的大模型逐段翻译。阅读时译文和原文 PDF 并排对照。
+        </p>
+      </div>
+      <div className="settings-body">
+        <TranslateGroup
+          title="MinerU 解析"
+          which="mineru"
+          info={info}
+          onSaved={refresh}
+          fields={[
+            { name: 'mineruKey', label: '密钥', secret: true, placeholder: '粘贴 MinerU API 密钥' },
+            { name: 'mineruModel', label: '模型', options: [['vlm', 'vlm（推荐，精度更高）'], ['pipeline', 'pipeline']] },
+          ]}
+          help={
+            <>
+              在 MinerU 官网登录后创建 API 密钥。每个账号每天有 1,000 页高优先级解析额度，单篇不超过 200 页。{' '}
+              <a href={MINERU_PAGE} target="_blank" rel="noreferrer">
+                打开 MinerU 密钥页 ↗
+              </a>
+            </>
+          }
+        />
+        <TranslateGroup
+          title="翻译模型"
+          which="llm"
+          info={info}
+          onSaved={refresh}
+          fields={[
+            { name: 'llmBaseUrl', label: '接口地址', placeholder: 'https://api.example.com/v1' },
+            { name: 'llmModel', label: '模型名称', placeholder: '例如 deepseek-chat' },
+            { name: 'llmKey', label: '密钥', secret: true, placeholder: '粘贴 API 密钥' },
+            { name: 'llmWorkers', label: '并发数', placeholder: '8', narrow: true },
+          ]}
+          help="任何兼容 OpenAI Chat Completions 的服务都可以，接口地址填到 /v1 为止。并发数是同时发出的请求数，越大越快，但要在服务商的速率限制以内。"
+        />
+        <ul className="settings-notes muted">
+          <li>密钥用系统钥匙串加密，只保存在这台电脑上，不会写进书库文件。</li>
+          <li>论文内容会发送给 MinerU 和你配置的模型服务商处理。</li>
+        </ul>
+      </div>
+    </section>
+  );
+}
+
+interface FieldSpec {
+  name: TranslateField;
+  label: string;
+  secret?: boolean;
+  placeholder?: string;
+  options?: [string, string][];
+  narrow?: boolean;
+}
+
+function TranslateGroup({
+  title,
+  which,
+  info,
+  fields,
+  help,
+  onSaved,
+}: {
+  title: string;
+  which: 'mineru' | 'llm';
+  info: TranslateInfo | null;
+  fields: FieldSpec[];
+  help: React.ReactNode;
+  onSaved(): void;
+}) {
+  const [draft, setDraft] = useState<Draft>({});
+  const [busy, setBusy] = useState<'test' | 'save' | null>(null);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const dirty = Object.values(draft).some((v) => v !== undefined);
+
+  const test = async () => {
+    setBusy('test');
+    setMessage(null);
+    const error = await api().checkTranslateSettings(which, draft);
+    setBusy(null);
+    setMessage(error ? { ok: false, text: error } : { ok: true, text: '连接正常。' });
+  };
+  const save = async () => {
+    setBusy('save');
+    setMessage(null);
+    const patch = Object.fromEntries(Object.entries(draft).filter(([, v]) => v !== undefined));
+    const error = await api().saveTranslateSettings(patch);
+    setBusy(null);
+    if (error) return setMessage({ ok: false, text: error });
+    setDraft({});
+    setMessage({ ok: true, text: '已保存。' });
+    onSaved();
+  };
+
+  return (
+    <div className="translate-group">
+      <h3>{title}</h3>
+      <p className="muted translate-help">{help}</p>
+      <div className="translate-fields">
+        {fields.map((f) => {
+          const current = info?.[f.name];
+          const value = draft[f.name] ?? (f.secret ? '' : String(current?.value ?? ''));
+          const set = (v: string) => {
+            setDraft((d) => ({ ...d, [f.name]: v }));
+            setMessage(null);
+          };
+          return (
+            <label key={f.name} className="translate-field">
+              <span className="settings-kicker">{f.label}</span>
+              {f.options ? (
+                <select value={value || f.options[0][0]} onChange={(e) => set(e.target.value)}>
+                  {f.options.map(([v, label]) => (
+                    <option key={v} value={v}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  className={f.narrow ? 'narrow' : undefined}
+                  type={f.secret ? 'password' : 'text'}
+                  value={value}
+                  placeholder={f.secret && current?.value ? `${current.value}（留空则不修改）` : f.placeholder}
+                  spellCheck={false}
+                  autoComplete="off"
+                  onChange={(e) => set(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && dirty && save()}
+                />
+              )}
+              {f.secret || f.name === 'llmBaseUrl' || f.name === 'llmModel' ? <Source info={current} /> : <span />}
+            </label>
+          );
+        })}
+      </div>
+      <div className="translate-actions">
+        <button className="btn btn-sm" onClick={test} disabled={!!busy}>
+          {busy === 'test' ? '测试中…' : '测试连接'}
+        </button>
+        <button className="btn btn-primary btn-sm" onClick={save} disabled={!dirty || !!busy}>
+          {busy === 'save' ? '保存中…' : '保存'}
+        </button>
+        {message && <span className={message.ok ? 'token-ok' : 'error'}>{message.text}</span>}
+      </div>
+    </div>
   );
 }

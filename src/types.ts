@@ -19,6 +19,8 @@ export interface Book {
   bodyStart?: number;
   /** Don't explain again that pages before the body get a [p x] placeholder. */
   citeHintOff?: boolean;
+  /** Papers: translation run (MinerU parse + LLM), kept in translations/<id>.json. */
+  translation?: { state: 'running' | 'done' | 'failed'; at?: number; error?: string };
   /** Hosted OCR run (PaddleOCR), kept apart from the PDF's own text. */
   ocr?: { state: 'running' | 'done' | 'failed'; model?: string; at?: number; error?: string };
 }
@@ -46,6 +48,60 @@ export interface OcrProgress {
   saved?: number;
   error?: string;
 }
+
+export interface TranslationProgress {
+  state: 'queued' | 'parsing' | 'translating' | 'done' | 'failed';
+  /** Pages parsed, or pieces translated. */
+  done?: number;
+  total?: number;
+  error?: string;
+}
+
+/** Where a block sits: 1-based page, box on a 0–1000 grid of that page. */
+export interface BlockPart {
+  page: number;
+  bbox: [number, number, number, number];
+}
+
+export type BlockKind =
+  | 'heading' | 'para' | 'quote' | 'note' | 'ref' | 'list' | 'equation' | 'image' | 'table' | 'skipped';
+
+/** A paper block in reading order; a paragraph cut by a page break has one part per page. */
+export interface PaperBlock {
+  id: string;
+  kind: BlockKind;
+  parts: BlockPart[];
+  text?: string;
+  level?: number;
+  items?: string[];
+  latex?: string;
+  html?: string;
+  caption?: string;
+  footnote?: string;
+  label?: string;
+}
+
+/** A translated piece (a block, or a list item / caption / table of one), as Markdown. */
+export interface TranslatedPiece {
+  /** Machine translation. */
+  mt?: string;
+  /** The reader's own wording; wins over `mt`. */
+  edit?: string;
+  flag?: string;
+}
+
+export interface PaperTranslation {
+  blocks?: PaperBlock[];
+  field?: string;
+  terms?: { en: string; zh: string }[];
+  model?: string;
+  pieces: Record<string, TranslatedPiece>;
+  finishedAt?: number;
+}
+
+/** Translation settings for the settings screen; secrets come masked. */
+export type TranslateField = 'mineruKey' | 'mineruModel' | 'llmBaseUrl' | 'llmModel' | 'llmKey' | 'llmWorkers';
+export type TranslateInfo = Record<TranslateField, { source: 'saved' | 'dev' | null; value: string | number | null }>;
 
 /**
  * A recognized line: its text, then the polygon's four corners clockwise from
@@ -179,6 +235,22 @@ export interface Api {
   /** Verifies the token with the service, then stores it encrypted. Resolves to an error message, or null. */
   saveOcrToken(token: string): Promise<string | null>;
   clearOcrToken(): Promise<void>;
+  startTranslation(bookId: string): Promise<void>;
+  translationStatus(): Promise<Record<string, TranslationProgress>>;
+  /** null until a translation was started. */
+  loadTranslation(bookId: string): Promise<PaperTranslation | null>;
+  /** Save the reader's wording for a piece; null restores the machine translation. */
+  editTranslation(bookId: string, id: string, text: string | null): Promise<TranslatedPiece | null>;
+  retranslatePiece(bookId: string, id: string): Promise<{ piece?: TranslatedPiece; error?: string }>;
+  translateInfo(): Promise<TranslateInfo>;
+  /** Empty strings clear a field. Resolves to an error message, or null. */
+  saveTranslateSettings(patch: Partial<Record<TranslateField, string | number>>): Promise<string | null>;
+  /** Resolves to an error message, or null. */
+  checkTranslateSettings(
+    which: 'mineru' | 'llm',
+    draft?: Partial<Record<TranslateField, string | number>>,
+  ): Promise<string | null>;
+  onTranslationProgress(fn: (bookId: string, progress: TranslationProgress | undefined) => void): () => void;
   /** Subscribe to OCR progress; returns an unsubscribe. */
   onOcrProgress(fn: (bookId: string, progress: OcrProgress | undefined) => void): () => void;
   /** ⌘Z / ⌘⇧Z (Ctrl+Z / Ctrl+Y), taken from the keyboard by the main process. */

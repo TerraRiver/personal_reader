@@ -1,6 +1,6 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from 'react';
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist';
-import { pdfjs } from '../pdf';
+import { openPdf, pdfjs } from '../pdf';
 import type { OcrLine } from '../types';
 
 const PAD = 32; // space around the page
@@ -53,7 +53,7 @@ const PdfViewer = forwardRef<PdfViewerHandle, Props>(function PdfViewer(
   // ----- load document -----
   useEffect(() => {
     let cancelled = false;
-    const task = pdfjs.getDocument({ data: data.slice() });
+    const task = openPdf(data.slice());
     task.promise
       .then((d) => {
         if (cancelled) return;

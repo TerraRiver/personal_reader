@@ -5,6 +5,20 @@ import { api, type Bookmark, type TextLayerKind } from './types';
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
+// Runtime assets copied by the build (see vite.config.ts). Without wasmUrl,
+// JBIG2 / JPEG 2000 images, common in scanned books, render as blank pages.
+const asset = (dir: string) => new URL(`pdfjs/${dir}/`, document.baseURI).href;
+const assetOptions = {
+  wasmUrl: asset('wasm'),
+  cMapUrl: asset('cmaps'),
+  cMapPacked: true,
+  standardFontDataUrl: asset('standard_fonts'),
+  iccUrl: asset('iccs'),
+};
+
+/** pdfjs.getDocument with the runtime assets every document needs. */
+export const openPdf = (data: Uint8Array) => pdfjs.getDocument({ data, ...assetOptions });
+
 export { pdfjs };
 
 // ---------------------------------------------------------------------------
@@ -91,7 +105,7 @@ export async function detectTextLayer(doc: PDFDocumentProxy): Promise<TextLayerK
 
 /** Opens a stored book, runs both checks, and records the results on the book. */
 export async function analyzeBook(bookId: string) {
-  const task = pdfjs.getDocument({ data: await api().readBook(bookId) });
+  const task = openPdf(await api().readBook(bookId));
   const doc = await task.promise;
   try {
     const [textLayer, bookmarks] = await Promise.all([detectTextLayer(doc), loadBookmarks(bookId, doc)]);

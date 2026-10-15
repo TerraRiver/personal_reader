@@ -5,6 +5,10 @@ export interface Book {
   lastPage: number;
   addedAt: number;
   openedAt: number | null;
+  /** Which shelf it sits on. Missing on records made before papers existed: a book. */
+  kind?: ShelfKind;
+  /** Papers only: the folder it's filed under; missing or null when uncategorized. */
+  folder?: string | null;
   /** Detected once in the background: real text, an OCR layer over scans, or scans only. */
   textLayer?: TextLayerKind;
   bookmarkCount?: number;
@@ -17,6 +21,20 @@ export interface Book {
   citeHintOff?: boolean;
   /** Hosted OCR run (PaddleOCR), kept apart from the PDF's own text. */
   ocr?: { state: 'running' | 'done' | 'failed'; model?: string; at?: number; error?: string };
+}
+
+export type ShelfKind = 'book' | 'paper';
+
+/** A category in the paper library. */
+export interface Folder {
+  id: string;
+  name: string;
+}
+
+/** Where imported files go. */
+export interface ImportTarget {
+  kind: ShelfKind;
+  folder?: string | null;
 }
 
 /** Live progress of an OCR run, pushed from the main process. */
@@ -135,10 +153,15 @@ export interface Notebook {
 
 export interface Api {
   listBooks(): Promise<Book[]>;
-  importBooks(): Promise<Book[]>;
-  importFiles(files: File[]): Promise<Book[]>;
+  importBooks(target?: ImportTarget): Promise<Book[]>;
+  importFiles(files: File[], target?: ImportTarget): Promise<Book[]>;
   updateBook(id: string, patch: Partial<Book>): Promise<Book[]>;
   removeBook(id: string): Promise<Book[]>;
+  listFolders(): Promise<Folder[]>;
+  addFolder(name: string): Promise<Folder[]>;
+  renameFolder(id: string, name: string): Promise<Folder[]>;
+  /** Papers filed under it become uncategorized. */
+  removeFolder(id: string): Promise<{ books: Book[]; folders: Folder[] }>;
   readBook(id: string): Promise<Uint8Array>;
   listNotes(bookId: string): Promise<Partial<Notebook> | null>;
   saveNotes(bookId: string, notebook: Notebook): Promise<void>;

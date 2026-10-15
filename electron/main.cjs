@@ -11,7 +11,7 @@ const DEV_URL = 'http://localhost:5173';
 if (process.env.READER_DATA_DIR) app.setPath('userData', process.env.READER_DATA_DIR);
 
 // ---------- storage ----------
-// <userData>/library/library.json   book metadata
+// <userData>/library/library.json   book and paper metadata, paper folders
 // <userData>/library/books/<id>.pdf copied pdf files
 // <userData>/library/notes/<id>.json notes of one book
 // <userData>/library/bookmarks/<id>.json bookmarks of one book
@@ -66,10 +66,25 @@ async function writeJson(file, data) {
 let queue = Promise.resolve();
 const serial = (fn) => (queue = queue.then(fn, fn));
 
-const loadBooks = async () => (await readJson(libraryFile(), { books: [] })).books;
-const saveBooks = (books) => writeJson(libraryFile(), { books });
+// Books and papers share one list (`kind` tells them apart); papers can sit in a folder.
+const loadLibrary = async () => {
+  const lib = await readJson(libraryFile(), {});
+  return { books: lib.books ?? [], folders: lib.folders ?? [] };
+};
+const loadBooks = async () => (await loadLibrary()).books;
+const loadFolders = async () => (await loadLibrary()).folders;
+async function saveBooks(books) {
+  const lib = await loadLibrary();
+  await writeJson(libraryFile(), { ...lib, books });
+}
+async function saveFolders(folders) {
+  const lib = await loadLibrary();
+  await writeJson(libraryFile(), { ...lib, folders });
+}
 
-async function importPaths(paths) {
+/** `target` says where new files go: { kind: 'book' | 'paper', folder?: id }. */
+async function importPaths(paths, target = {}) {
+  const kind = target.kind === 'paper' ? 'paper' : 'book';
   return serial(async () => {
     const books = await loadBooks();
     await fs.mkdir(path.join(root(), 'books'), { recursive: true });
@@ -84,6 +99,8 @@ async function importPaths(paths) {
         lastPage: 1,
         addedAt: Date.now(),
         openedAt: null,
+        kind,
+        ...(kind === 'paper' && target.folder ? { folder: target.folder } : {}),
       });
     }
     await saveBooks(books);
@@ -116,7 +133,7 @@ const ocr = createOcr({
 // ---------- ipc ----------
 ipcMain.handle('library:list', () => loadBooks());
 
-ipcMain.handle('library:import', async (e) => {
+ipcMain.handle('library:import', async (e, target) => {
   const win = BrowserWindow.fromWebContents(e.sender);
   const res = await dialog.showOpenDialog(win, {
     title: 'Import PDF',
@@ -124,10 +141,10 @@ ipcMain.handle('library:import', async (e) => {
     filters: [{ name: 'PDF', extensions: ['pdf'] }],
   });
   if (res.canceled) return loadBooks();
-  return importPaths(res.filePaths);
+  return importPaths(res.filePaths, target);
 });
 
-ipcMain.handle('library:importPaths', (_e, paths) => importPaths(paths));
+ipcMain.handle('library:importPaths', (_e, paths, target) => importPaths(paths, target));
 
 ipcMain.handle('library:update', (_e, id, patch) => updateBook(id, patch));
 
@@ -144,6 +161,38 @@ ipcMain.handle('library:remove', (_e, id) => {
     return books;
   });
 });
+
+ipcMain.handle('folders:list', () => loadFolders());
+
+ipcMain.handle('folders:add', (_e, name) =>
+  serial(async () => {
+    const folders = await loadFolders();
+    folders.push({ id: crypto.randomUUID(), name: String(name).trim() || '未命名' });
+    await saveFolders(folders);
+    return folders;
+  }),
+);
+
+ipcMain.handle('folders:rename', (_e, id, name) =>
+  serial(async () => {
+    const folders = await loadFolders();
+    const folder = folders.find((f) => f.id === id);
+    if (folder && String(name).trim()) folder.name = String(name).trim();
+    await saveFolders(folders);
+    return folders;
+  }),
+);
+
+// Papers in a removed folder become uncategorized; the files stay.
+ipcMain.handle('folders:remove', (_e, id) =>
+  serial(async () => {
+    const lib = await loadLibrary();
+    const folders = lib.folders.filter((f) => f.id !== id);
+    for (const b of lib.books) if (b.folder === id) delete b.folder;
+    await writeJson(libraryFile(), { ...lib, folders });
+    return { books: lib.books, folders };
+  }),
+);
 
 ipcMain.handle('book:data', (_e, id) => fs.readFile(bookFile(id)));
 

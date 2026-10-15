@@ -413,7 +413,7 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
     <div className="reader">
       <div className="titlebar reader-titlebar">
         <button className="link back" onClick={onClose}>
-          ← 书库
+          ← {book?.kind === 'paper' ? '论文库' : '书库'}
         </button>
         <div className="reader-title">{book?.title}</div>
         <button className="link" onClick={() => setShowNotes((s) => !s)} title={shortcut('\\')}>

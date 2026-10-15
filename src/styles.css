@@ -2088,11 +2088,14 @@ html:not([data-platform='mac']) .settings-titlebar {
    Paper translation
    ========================================================================== */
 
-.pane-switch {
-  justify-self: end;
+/* Beside the PDF, inside the right pane. */
+.pane-translation {
+  flex: none;
+  min-width: 0;
   display: flex;
-  gap: 18px;
-  -webkit-app-region: no-drag;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
 }
 
 .translation {

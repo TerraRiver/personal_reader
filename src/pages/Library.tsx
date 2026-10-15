@@ -516,8 +516,8 @@ export default function Library({
                         book={b}
                         live={translating[b.id]}
                         onOpen={() => {
-                          // Open straight onto the translation.
-                          localStorage.setItem('reader.leftPane', 'translation');
+                          // Open with the translation beside the PDF.
+                          localStorage.setItem('reader.translation', '1');
                           onOpen(b.id);
                         }}
                       />

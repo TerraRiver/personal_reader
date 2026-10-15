@@ -30,7 +30,8 @@ const SPLIT_KEY = 'reader.split';
 const FOLLOW_KEY = 'reader.follow';
 const BOOKMARKS_KEY = 'reader.bookmarks';
 const STAMP_COLOR_KEY = 'reader.stampColor';
-const LEFT_PANE_KEY = 'reader.leftPane';
+const TRANSLATION_KEY = 'reader.translation';
+const TRANSLATION_SPLIT_KEY = 'reader.translationSplit';
 const TRANSLATION_FOLLOW_KEY = 'reader.translationFollow';
 
 export default function Reader({ bookId, onClose }: { bookId: string; onClose(): void }) {
@@ -82,10 +83,11 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
 
   // ----- paper translation, reloaded as a running translation saves more -----
   const isPaper = book?.kind === 'paper';
-  const [leftPane, setLeftPane] = useState<'notes' | 'translation'>(() =>
-    localStorage.getItem(LEFT_PANE_KEY) === 'translation' ? 'translation' : 'notes',
-  );
-  const pane = isPaper ? leftPane : 'notes';
+  // The translation sits beside the PDF, in the right pane; notes keep the left.
+  const [translationOn, setTranslationOn] = useState(() => localStorage.getItem(TRANSLATION_KEY) !== '0');
+  const showTranslation = isPaper && translationOn;
+  const [tSplit, setTSplit] = useState(() => Number(localStorage.getItem(TRANSLATION_SPLIT_KEY)) || 0.45);
+  const pdfPane = useRef<HTMLElement>(null);
   const [translation, setTranslation] = useState<PaperTranslation | null>(null);
   const [tProgress, setTProgress] = useState<TranslationProgress | undefined>();
   const [tFollow, setTFollow] = useState(() => localStorage.getItem(TRANSLATION_FOLLOW_KEY) !== '0');
@@ -103,12 +105,11 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
         api().listBooks().then((books) => setBook((b) => books.find((x) => x.id === bookId) ?? b));
     });
   }, [bookId, isPaper]);
-  const showPane = (next: 'notes' | 'translation') => {
-    // Clicking the pane that's showing hides it.
-    if (showNotes && pane === next) return setShowNotes(false);
-    setShowNotes(true);
-    setLeftPane(next);
-    localStorage.setItem(LEFT_PANE_KEY, next);
+  const toggleTranslation = () => {
+    setTranslationOn((on) => {
+      localStorage.setItem(TRANSLATION_KEY, on ? '0' : '1');
+      return !on;
+    });
   };
   const pickBlock = useCallback((b: PaperBlock) => {
     setPicked(b);
@@ -312,10 +313,10 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
     (p: number, w: number, h: number) => (
       <>
         {annotationOverlay(p, w, h)}
-        {pane === 'translation' && pickedBoxes(p, w, h)}
+        {showTranslation && pickedBoxes(p, w, h)}
       </>
     ),
-    [annotationOverlay, pickedBoxes, pane],
+    [annotationOverlay, pickedBoxes, showTranslation],
   );
 
   // ----- persist notes and reading position -----
@@ -458,6 +459,27 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
     window.addEventListener('pointerup', up);
   };
 
+  // The divider between the PDF and the translation: the translation's share of the right pane.
+  const startTranslationDrag = (e: React.PointerEvent) => {
+    e.preventDefault();
+    const el = pdfPane.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    document.body.classList.add('resizing');
+    const move = (ev: PointerEvent) => setTSplit(Math.min(0.7, Math.max(0.25, (rect.right - ev.clientX) / rect.width)));
+    const up = () => {
+      document.body.classList.remove('resizing');
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      setTSplit((r) => {
+        localStorage.setItem(TRANSLATION_SPLIT_KEY, String(r));
+        return r;
+      });
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+
   // ⌘\ / Ctrl+\ toggles the notes pane, ⌘B / Ctrl+B the bookmarks.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -485,48 +507,13 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
           ← {book?.kind === 'paper' ? '论文库' : '书库'}
         </button>
         <div className="reader-title">{book?.title}</div>
-        {isPaper ? (
-          <div className="pane-switch">
-            <button className={`link${showNotes && pane === 'notes' ? ' on' : ''}`} onClick={() => showPane('notes')}>
-              笔记
-            </button>
-            <button
-              className={`link${showNotes && pane === 'translation' ? ' on' : ''}`}
-              onClick={() => showPane('translation')}
-            >
-              译文
-            </button>
-          </div>
-        ) : (
-          <button className="link" onClick={() => setShowNotes((s) => !s)} title={shortcut('\\')}>
-            {showNotes ? '隐藏笔记' : '显示笔记'}
-          </button>
-        )}
+        <button className="link" onClick={() => setShowNotes((s) => !s)} title={shortcut('\\')}>
+          {showNotes ? '隐藏笔记' : '显示笔记'}
+        </button>
       </div>
 
       <div className="reader-body" ref={body}>
-        {showNotes && book && pane === 'translation' && (
-          <>
-            <section className="pane pane-notes" style={{ width: `${split * 100}%` }}>
-              <TranslationPanel
-                book={book}
-                translation={translation}
-                progress={tProgress}
-                currentPage={page}
-                follow={tFollow}
-                onFollowChange={(f) => {
-                  setTFollow(f);
-                  localStorage.setItem(TRANSLATION_FOLLOW_KEY, f ? '1' : '0');
-                }}
-                selected={picked?.id ?? null}
-                onSelect={pickBlock}
-                onPiece={changePiece}
-              />
-            </section>
-            <div className="divider" onPointerDown={startDrag} />
-          </>
-        )}
-        {showNotes && notebook && book && pane === 'notes' && (
+        {showNotes && notebook && book && (
           <>
             <section className="pane pane-notes" style={{ width: `${split * 100}%` }}>
               <NotesPanel
@@ -546,7 +533,7 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
             <div className="divider" onPointerDown={startDrag} />
           </>
         )}
-        <section className="pane pane-pdf">
+        <section className="pane pane-pdf" ref={pdfPane}>
           {toast && <div className="toast">{toast}</div>}
           {showBookmarks && bookmarks && (
             <BookmarksPanel
@@ -570,6 +557,15 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
               onLoad={onLoad}
               barStart={
                 <>
+                  {isPaper && (
+                    <button
+                      className={`link${showTranslation ? ' on' : ''}`}
+                      onClick={toggleTranslation}
+                      title="在 PDF 右侧并排显示译文"
+                    >
+                      译文
+                    </button>
+                  )}
                   <button className={`link${showBookmarks ? ' on' : ''}`} onClick={toggleBookmarks} title={shortcut('B')}>
                     书签<span className="count-badge">{String(bookmarks?.length ?? 0).padStart(2, '0')}</span>
                   </button>
@@ -610,6 +606,27 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
             />
           ) : (
             <div className="loading muted">加载中…</div>
+          )}
+          {showTranslation && book && (
+            <>
+              <div className="divider" onPointerDown={startTranslationDrag} />
+              <section className="pane-translation" style={{ width: `${tSplit * 100}%` }}>
+                <TranslationPanel
+                  book={book}
+                  translation={translation}
+                  progress={tProgress}
+                  currentPage={page}
+                  follow={tFollow}
+                  onFollowChange={(f) => {
+                    setTFollow(f);
+                    localStorage.setItem(TRANSLATION_FOLLOW_KEY, f ? '1' : '0');
+                  }}
+                  selected={picked?.id ?? null}
+                  onSelect={pickBlock}
+                  onPiece={changePiece}
+                />
+              </section>
+            </>
           )}
         </section>
       </div>

@@ -3,13 +3,24 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
-import { api, type Book, type PaperBlock, type PaperTranslation, type TranslatedPiece, type TranslationProgress } from '../types';
+import {
+  api,
+  type Book,
+  type PaperBlock,
+  type PaperTranslation,
+  type ParseProgress,
+  type TranslatedPiece,
+  type TranslationProgress,
+} from '../types';
 import { isMod } from '../platform';
+import { ConfirmDialog, RANGE_PAGES, TranslateDialog } from './RunDialogs';
 
 interface Props {
   book: Book;
+  /** The parsed blocks with their translations; null before the book is parsed. */
   translation: PaperTranslation | null;
   progress?: TranslationProgress;
+  parseProgress?: ParseProgress;
   currentPage: number;
   follow: boolean;
   onFollowChange(follow: boolean): void;
@@ -79,11 +90,32 @@ function safeTable(html: string) {
 
 const shown = (p?: TranslatedPiece) => p?.edit ?? p?.mt;
 
+const inRanges = (ranges: [number, number][], page: number) => ranges.some(([from, to]) => page >= from && page <= to);
+
+/** Blocks in reading order, with runs outside the translated ranges folded into one gap each. */
+type Row = { block: PaperBlock } | { gap: [number, number]; first: string };
+function rows(blocks: PaperBlock[], ranges: [number, number][]): Row[] {
+  const out: Row[] = [];
+  for (const b of blocks) {
+    const page = b.parts[0].page;
+    if (inRanges(ranges, page)) {
+      out.push({ block: b });
+      continue;
+    }
+    const last = out.at(-1);
+    if (last && 'gap' in last) last.gap[1] = Math.max(last.gap[1], page);
+    else out.push({ gap: [page, page], first: b.id });
+  }
+  return out;
+}
+
 export default function TranslationPanel(props: Props) {
-  const { book, translation, progress, currentPage, follow, onFollowChange, selected, onSelect } = props;
+  const { book, translation, progress, parseProgress, currentPage, follow, onFollowChange, selected, onSelect } = props;
   const [showOriginal, setShowOriginal] = useState(() => localStorage.getItem(SHOW_ORIGINAL_KEY) === '1');
+  const [asking, setAsking] = useState<[number, number] | true | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const blocks = (translation?.blocks ?? []).filter((b) => b.kind !== 'skipped');
+  const ranges = translation?.ranges ?? [];
 
   // Turning the PDF brings its first block into view, unless the turn came from a click here.
   const jumped = useRef<number | null>(null);
@@ -96,7 +128,13 @@ export default function TranslationPanel(props: Props) {
     if (!follow) return;
     const b = blocks.find((x) => x.parts.some((p) => p.page === currentPage));
     if (!b) return;
-    scroller.current?.querySelector(`[data-id="${b.id}"]`)?.scrollIntoView({ block: 'start' });
+    const el =
+      scroller.current?.querySelector(`[data-id="${b.id}"]`) ??
+      [...(scroller.current?.querySelectorAll<HTMLElement>('[data-gap]') ?? [])].find((g) => {
+        const [from, to] = g.dataset.gap!.split('-').map(Number);
+        return currentPage >= from && currentPage <= to;
+      });
+    el?.scrollIntoView({ block: 'start' });
     // Only on page turns (and once blocks first arrive), not on every new paragraph.
   }, [currentPage, follow, blocks.length > 0]);
 
@@ -105,17 +143,23 @@ export default function TranslationPanel(props: Props) {
     onSelect(b);
   };
 
-  const running = progress && ['queued', 'parsing', 'translating'].includes(progress.state);
+  const running = progress && ['queued', 'translating'].includes(progress.state);
   const failed = !running && (progress?.state === 'failed' || book.translation?.state === 'failed');
   const pieces = translation?.pieces ?? {};
   const doneCount = Object.values(pieces).filter((p) => p.mt != null).length;
+  const shownRows = rows(blocks, ranges);
+  // Pages not translated yet: long books ask which, with the gap clicked as the suggestion.
+  const translatePages = (gap?: [number, number]) => {
+    if ((book.pageCount || 0) > RANGE_PAGES) setAsking(gap ?? true);
+    else api().startTranslation(book.id, gap ?? [1, book.pageCount || 1]);
+  };
 
   return (
     <div className="translation">
       <div className="pane-bar">
         <div className="bar-left">
           <span className="pane-title">译文</span>
-          <Status book={book} progress={progress} />
+          <Status book={book} progress={progress} parseProgress={parseProgress} />
         </div>
         <div className="bar-right">
           <label className="toggle" title="显示每段的英文原文">
@@ -140,7 +184,7 @@ export default function TranslationPanel(props: Props) {
 
       <div className="translation-body" ref={scroller}>
         {!translation?.blocks ? (
-          <Empty book={book} progress={progress} failed={!!failed} />
+          <Unparsed book={book} progress={parseProgress} />
         ) : (
           <>
             {failed && (
@@ -150,6 +194,19 @@ export default function TranslationPanel(props: Props) {
                   重试
                 </button>
               </p>
+            )}
+            {!ranges.length && !running && !failed && (
+              <div className="translation-empty">
+                <p>还没有译文。</p>
+                <p className="muted">
+                  由大模型逐段翻译成中文。译文按段落排版，点一段即可在 PDF 中定位原文，也可以直接修改。
+                  {(book.pageCount || 0) > RANGE_PAGES && ` 这份 PDF 共 ${book.pageCount} 页，可以一次只翻译一部分。`}
+                </p>
+                <button className="btn btn-primary btn-sm" onClick={() => translatePages()}>
+                  开始翻译
+                </button>
+                <p className="muted small-print">翻译模型在图书馆右上角「设置」里填写。</p>
+              </div>
             )}
             {translation.terms && translation.terms.length > 0 && (
               <details className="glossary">
@@ -166,31 +223,53 @@ export default function TranslationPanel(props: Props) {
                 </dl>
               </details>
             )}
-            {blocks.map((b) => (
-              <Block
-                key={b.id}
-                block={b}
-                bookId={book.id}
-                pieces={pieces}
-                selected={selected === b.id}
-                showOriginal={showOriginal}
-                pending={!!running}
-                onPick={pick}
-                onPiece={props.onPiece}
-              />
-            ))}
-            {doneCount > 0 && <p className="muted translation-end">— 完 —</p>}
+            {ranges.length > 0 &&
+              shownRows.map((r) =>
+                'gap' in r ? (
+                  <div className="tgap" key={r.first} data-gap={`${r.gap[0]}-${r.gap[1]}`}>
+                    <span className="muted">
+                      {r.gap[0] === r.gap[1] ? `第 ${r.gap[0]} 页` : `第 ${r.gap[0]}–${r.gap[1]} 页`}未翻译
+                    </span>
+                    <button className="link small" onClick={() => translatePages(r.gap)} disabled={!!running}>
+                      翻译这部分
+                    </button>
+                  </div>
+                ) : (
+                  <Block
+                    key={r.block.id}
+                    block={r.block}
+                    bookId={book.id}
+                    pieces={pieces}
+                    selected={selected === r.block.id}
+                    showOriginal={showOriginal}
+                    pending={!!running}
+                    onPick={pick}
+                    onPiece={props.onPiece}
+                  />
+                ),
+              )}
+            {doneCount > 0 && !(shownRows.at(-1) && 'gap' in shownRows.at(-1)!) && (
+              <p className="muted translation-end">— 完 —</p>
+            )}
           </>
         )}
       </div>
+      {asking && (
+        <TranslateDialog book={book} initial={asking === true ? undefined : asking} onClose={() => setAsking(null)} />
+      )}
     </div>
   );
 }
 
-function Status({ book, progress }: { book: Book; progress?: TranslationProgress }) {
+function Status({ book, progress, parseProgress }: { book: Book; progress?: TranslationProgress; parseProgress?: ParseProgress }) {
+  if (parseProgress?.state === 'queued') return <span className="muted">等待解析…</span>;
+  if (parseProgress?.state === 'parsing')
+    return (
+      <span className="muted tnum">
+        解析 PDF {parseProgress.total ? `${parseProgress.done ?? 0}/${parseProgress.total} 页` : '…'}
+      </span>
+    );
   if (progress?.state === 'queued') return <span className="muted">等待中…</span>;
-  if (progress?.state === 'parsing')
-    return <span className="muted tnum">解析 PDF {progress.total ? `${progress.done ?? 0}/${progress.total} 页` : '…'}</span>;
   if (progress?.state === 'translating')
     return (
       <span className="translation-progress tnum">
@@ -200,29 +279,54 @@ function Status({ book, progress }: { book: Book; progress?: TranslationProgress
         翻译中 {progress.done ?? 0}/{progress.total ?? '…'}
       </span>
     );
-  if (book.translation?.state === 'done' || progress?.state === 'done') return <span className="tag tag-ocr">已翻译</span>;
+  if (book.translation?.state === 'done' || progress?.state === 'done') {
+    const pages = book.translation?.pages ?? 0;
+    return (
+      <span className="tag tag-ocr">
+        {pages > 0 && pages < book.pageCount ? `已译 ${pages}/${book.pageCount} 页` : '已翻译'}
+      </span>
+    );
+  }
   return null;
 }
 
-function Empty({ book, progress, failed }: { book: Book; progress?: TranslationProgress; failed: boolean }) {
-  if (progress && ['queued', 'parsing', 'translating'].includes(progress.state))
+/** Before a parse: translating needs one, so offer it (or show how it's going). */
+function Unparsed({ book, progress }: { book: Book; progress?: ParseProgress }) {
+  const [confirming, setConfirming] = useState(false);
+  if (progress && ['queued', 'parsing'].includes(progress.state))
     return (
       <div className="translation-empty">
-        <p>正在解析这篇论文的版面…</p>
-        <p className="muted">解析完成后开始翻译，译好的段落会陆续出现在这里。可以先读原文。</p>
+        <p>正在解析版面…</p>
+        <p className="muted">解析完成后就可以翻译了。可以先读原文。</p>
       </div>
     );
+  const failed = progress?.state === 'failed' || book.parse?.state === 'failed';
+  const start = () => ((book.pageCount || 0) > RANGE_PAGES ? setConfirming(true) : api().startParse(book.id));
   return (
     <div className="translation-empty">
-      <p>这篇论文还没有译文。</p>
+      <p>翻译前需要先解析。</p>
       <p className="muted">
-        先用 MinerU 解析版面，再由大模型逐段翻译成中文。译文按段落排版，点一段即可在右侧 PDF 中定位原文，也可以直接修改。
+        先用 MinerU 解析出标题、段落、注释、表格和公式，再由大模型逐段翻译成中文。
       </p>
-      {failed && <p className="error">{progress?.error ?? book.translation?.error}</p>}
-      <button className="btn btn-primary btn-sm" onClick={() => api().startTranslation(book.id)}>
-        {failed ? '重试' : '开始翻译'}
+      {failed && <p className="error">{progress?.error ?? book.parse?.error}</p>}
+      <button className="btn btn-primary btn-sm" onClick={failed ? () => api().startParse(book.id) : start}>
+        {failed ? '重试' : '解析'}
       </button>
-      <p className="muted small-print">MinerU 密钥和翻译模型在书库右上角「设置」里填写。</p>
+      <p className="muted small-print">MinerU 密钥和翻译模型在图书馆右上角「设置」里填写。</p>
+      {confirming && (
+        <ConfirmDialog
+          title="开始解析？"
+          confirm="开始解析"
+          onCancel={() => setConfirming(false)}
+          onConfirm={() => {
+            api().startParse(book.id);
+            setConfirming(false);
+          }}
+        >
+          这份 PDF 共 {book.pageCount} 页，解析会用掉同样多的 MinerU 额度（每个账号每天 1,000 页高优先级额度）。超过 200
+          页会拆成几块分别解析，再拼接起来。
+        </ConfirmDialog>
+      )}
     </div>
   );
 }

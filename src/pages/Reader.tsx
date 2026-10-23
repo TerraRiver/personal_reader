@@ -9,6 +9,7 @@ import {
   type Notebook,
   type OcrData,
   type PaperBlock,
+  type ParseProgress,
   type PaperTranslation,
   type StampType,
   type TranslatedPiece,
@@ -26,12 +27,10 @@ import BookmarksPanel, { currentBookmark } from '../components/BookmarksPanel';
 import TranslationPanel from '../components/TranslationPanel';
 import { isMod, shortcut } from '../platform';
 
-const SPLIT_KEY = 'reader.split';
 const FOLLOW_KEY = 'reader.follow';
 const BOOKMARKS_KEY = 'reader.bookmarks';
 const STAMP_COLOR_KEY = 'reader.stampColor';
 const TRANSLATION_KEY = 'reader.translation';
-const TRANSLATION_SPLIT_KEY = 'reader.translationSplit';
 const TRANSLATION_FOLLOW_KEY = 'reader.translationFollow';
 
 export default function Reader({ bookId, onClose }: { bookId: string; onClose(): void }) {
@@ -40,7 +39,6 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
   const [notebook, setNotebook] = useState<Notebook | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
-  const [split, setSplit] = useState(() => Number(localStorage.getItem(SPLIT_KEY)) || 0.38);
   const [follow, setFollow] = useState(() => localStorage.getItem(FOLLOW_KEY) !== '0');
   const [showNotes, setShowNotes] = useState(true);
   const [bookmarks, setBookmarks] = useState<Bookmark[] | null>(null);
@@ -48,7 +46,6 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
   const [pageCount, setPageCount] = useState(0);
   const [ocr, setOcr] = useState<OcrData | null>(null);
   const viewer = useRef<PdfViewerHandle>(null);
-  const body = useRef<HTMLDivElement>(null);
 
   // ----- load -----
   useEffect(() => {
@@ -81,35 +78,44 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
   }, [bookId]);
   const ocrLines = useCallback((p: number) => ocr?.pages[p]?.lines, [ocr]);
 
-  // ----- paper translation, reloaded as a running translation saves more -----
-  const isPaper = book?.kind === 'paper';
+  // ----- translation, reloaded as a parse finishes or a running translation saves more -----
   // The translation sits beside the PDF, in the right pane; notes keep the left.
-  const [translationOn, setTranslationOn] = useState(() => localStorage.getItem(TRANSLATION_KEY) !== '0');
-  const showTranslation = isPaper && translationOn;
-  const [tSplit, setTSplit] = useState(() => Number(localStorage.getItem(TRANSLATION_SPLIT_KEY)) || 0.45);
-  const pdfPane = useRef<HTMLElement>(null);
+  // Opens by itself only for books that have a translation (unless turned off); the button
+  // opens it on any book, e.g. to start parsing.
+  const [translationOn, setTranslationOn] = useState<boolean | null>(null);
+  const showTranslation =
+    !!book && (translationOn ?? (!!book.translation && localStorage.getItem(TRANSLATION_KEY) !== '0'));
   const [translation, setTranslation] = useState<PaperTranslation | null>(null);
   const [tProgress, setTProgress] = useState<TranslationProgress | undefined>();
+  const [parseProgress, setParseProgress] = useState<ParseProgress | undefined>();
   const [tFollow, setTFollow] = useState(() => localStorage.getItem(TRANSLATION_FOLLOW_KEY) !== '0');
   const [picked, setPicked] = useState<PaperBlock | null>(null);
   useEffect(() => {
-    if (!isPaper) return;
     const load = () => api().loadTranslation(bookId).then(setTranslation);
+    const reloadBook = () => api().listBooks().then((books) => setBook((b) => books.find((x) => x.id === bookId) ?? b));
     load();
     api().translationStatus().then((all) => setTProgress(all[bookId]));
-    return api().onTranslationProgress((id, p) => {
+    api().parseStatus().then((all) => setParseProgress(all[bookId]));
+    const offTranslation = api().onTranslationProgress((id, p) => {
       if (id !== bookId) return;
       setTProgress(p);
       load();
-      if (p?.state === 'done' || p?.state === 'failed')
-        api().listBooks().then((books) => setBook((b) => books.find((x) => x.id === bookId) ?? b));
+      if (p?.state === 'done' || p?.state === 'failed') reloadBook();
     });
-  }, [bookId, isPaper]);
+    const offParse = api().onParseProgress((id, p) => {
+      if (id !== bookId) return;
+      setParseProgress(p);
+      if (p?.state === 'done') load();
+      if (p?.state === 'done' || p?.state === 'failed') reloadBook();
+    });
+    return () => {
+      offTranslation();
+      offParse();
+    };
+  }, [bookId]);
   const toggleTranslation = () => {
-    setTranslationOn((on) => {
-      localStorage.setItem(TRANSLATION_KEY, on ? '0' : '1');
-      return !on;
-    });
+    localStorage.setItem(TRANSLATION_KEY, showTranslation ? '0' : '1');
+    setTranslationOn(!showTranslation);
   };
   const pickBlock = useCallback((b: PaperBlock) => {
     setPicked(b);
@@ -436,50 +442,6 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
     if (f) setActiveId((id) => noteForPage(viewsRef.current, page, id));
   };
 
-  // ----- split divider -----
-  const startDrag = (e: React.PointerEvent) => {
-    e.preventDefault();
-    const el = body.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    document.body.classList.add('resizing');
-    const move = (ev: PointerEvent) => {
-      setSplit(Math.min(0.7, Math.max(0.2, (ev.clientX - rect.left) / rect.width)));
-    };
-    const up = () => {
-      document.body.classList.remove('resizing');
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      setSplit((r) => {
-        localStorage.setItem(SPLIT_KEY, String(r));
-        return r;
-      });
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-  };
-
-  // The divider between the PDF and the translation: the translation's share of the right pane.
-  const startTranslationDrag = (e: React.PointerEvent) => {
-    e.preventDefault();
-    const el = pdfPane.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    document.body.classList.add('resizing');
-    const move = (ev: PointerEvent) => setTSplit(Math.min(0.7, Math.max(0.25, (rect.right - ev.clientX) / rect.width)));
-    const up = () => {
-      document.body.classList.remove('resizing');
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      setTSplit((r) => {
-        localStorage.setItem(TRANSLATION_SPLIT_KEY, String(r));
-        return r;
-      });
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-  };
-
   // ⌘\ / Ctrl+\ toggles the notes pane, ⌘B / Ctrl+B the bookmarks.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -504,18 +466,24 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
     <div className="reader">
       <div className="titlebar reader-titlebar">
         <button className="link back" onClick={onClose}>
-          ← {book?.kind === 'paper' ? '论文库' : '书库'}
+          ← 图书馆
         </button>
         <div className="reader-title">{book?.title}</div>
-        <button className="link" onClick={() => setShowNotes((s) => !s)} title={shortcut('\\')}>
-          {showNotes ? '隐藏笔记' : '显示笔记'}
-        </button>
+        <div className="titlebar-actions">
+          <button className="link" onClick={() => setShowNotes((s) => !s)} title={shortcut('\\')}>
+            {showNotes ? '隐藏笔记' : '显示笔记'}
+          </button>
+          <button className="link" onClick={toggleTranslation} title="在 PDF 右侧并排显示译文">
+            {showTranslation ? '隐藏译文' : '显示译文'}
+          </button>
+        </div>
       </div>
 
-      <div className="reader-body" ref={body}>
+      <div className="reader-body">
         {showNotes && notebook && book && (
           <>
-            <section className="pane pane-notes" style={{ width: `${split * 100}%` }}>
+            {/* Equal shares, not adjustable: a third each with the translation open, otherwise a half. */}
+            <section className="pane pane-notes" style={{ width: showTranslation ? `${100 / 3}%` : '50%' }}>
               <NotesPanel
                 notebook={notebook}
                 activeId={activeId}
@@ -530,10 +498,10 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
                 onUpdateBook={updateBook}
               />
             </section>
-            <div className="divider" onPointerDown={startDrag} />
+            <div className="pane-rule" />
           </>
         )}
-        <section className="pane pane-pdf" ref={pdfPane}>
+        <section className="pane pane-pdf">
           {toast && <div className="toast">{toast}</div>}
           {showBookmarks && bookmarks && (
             <BookmarksPanel
@@ -557,15 +525,6 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
               onLoad={onLoad}
               barStart={
                 <>
-                  {isPaper && (
-                    <button
-                      className={`link${showTranslation ? ' on' : ''}`}
-                      onClick={toggleTranslation}
-                      title="在 PDF 右侧并排显示译文"
-                    >
-                      译文
-                    </button>
-                  )}
                   <button className={`link${showBookmarks ? ' on' : ''}`} onClick={toggleBookmarks} title={shortcut('B')}>
                     书签<span className="count-badge">{String(bookmarks?.length ?? 0).padStart(2, '0')}</span>
                   </button>
@@ -609,12 +568,13 @@ export default function Reader({ bookId, onClose }: { bookId: string; onClose():
           )}
           {showTranslation && book && (
             <>
-              <div className="divider" onPointerDown={startTranslationDrag} />
-              <section className="pane-translation" style={{ width: `${tSplit * 100}%` }}>
+              <div className="pane-rule" />
+              <section className="pane-translation">
                 <TranslationPanel
                   book={book}
                   translation={translation}
                   progress={tProgress}
+                  parseProgress={parseProgress}
                   currentPage={page}
                   follow={tFollow}
                   onFollowChange={(f) => {

@@ -3,7 +3,9 @@ const path = require('node:path');
 const fs = require('node:fs/promises');
 const crypto = require('node:crypto');
 const { createOcr, checkToken } = require('./ocr.cjs');
-const { createTranslator, checkMineru, checkLlm } = require('./translate.cjs');
+const { exportOcrPdf } = require('./ocr-pdf.cjs');
+const { createParser, checkMineru } = require('./parse.cjs');
+const { createTranslator, checkLlm } = require('./translate.cjs');
 const createSettings = require('./settings.cjs');
 
 const DEV_URL = 'http://localhost:5173';
@@ -12,13 +14,14 @@ const DEV_URL = 'http://localhost:5173';
 if (process.env.READER_DATA_DIR) app.setPath('userData', process.env.READER_DATA_DIR);
 
 // ---------- storage ----------
-// <userData>/library/library.json   book and paper metadata, paper folders
+// <userData>/library/library.json   book metadata and folders
 // <userData>/library/books/<id>.pdf copied pdf files
 // <userData>/library/notes/<id>.json notes of one book
 // <userData>/library/bookmarks/<id>.json bookmarks of one book
 // <userData>/library/ocr/<id>.json       hosted OCR results of one book
 // <userData>/library/annotations/<id>.json  highlights and stamps of one book
-// <userData>/library/translations/<id>.json paper translation: parsed blocks and their translations
+// <userData>/library/parsed/<id>/        MinerU parse: state.json, chunk content lists, images
+// <userData>/library/translations/<id>.json translations of the parsed blocks
 
 const root = () => path.join(app.getPath('userData'), 'library');
 const libraryFile = () => path.join(root(), 'library.json');
@@ -28,7 +31,7 @@ const libraryFile = () => path.join(root(), 'library.json');
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fileOf = (dir, ext) => (id) => {
   if (!ID.test(id)) throw new Error(`无效的编号：${id}`);
-  return path.join(root(), dir, `${id}.${ext}`);
+  return path.join(root(), dir, ext ? `${id}.${ext}` : id);
 };
 const bookFile = fileOf('books', 'pdf');
 const notesFile = fileOf('notes', 'json');
@@ -36,6 +39,7 @@ const bookmarksFile = fileOf('bookmarks', 'json');
 const ocrFile = fileOf('ocr', 'json');
 const annotationsFile = fileOf('annotations', 'json');
 const translationFile = fileOf('translations', 'json');
+const parsedDir = fileOf('parsed');
 
 // Missing files fall back to the default. A file that exists but can't be parsed
 // is moved aside first, so the next save can never overwrite the only copy.
@@ -77,10 +81,11 @@ async function writeJson(file, data) {
 let queue = Promise.resolve();
 const serial = (fn) => (queue = queue.then(fn, fn));
 
-// Books and papers share one list (`kind` tells them apart); papers can sit in a folder.
+// One list of books; each can sit in a folder.
 const loadLibrary = async () => {
   const lib = await readJson(libraryFile(), {});
-  return { books: lib.books ?? [], folders: lib.folders ?? [] };
+  // Other fields (the format version) are kept, so saving never drops them.
+  return { ...lib, books: lib.books ?? [], folders: lib.folders ?? [] };
 };
 const loadBooks = async () => (await loadLibrary()).books;
 const loadFolders = async () => (await loadLibrary()).folders;
@@ -93,9 +98,8 @@ async function saveFolders(folders) {
   await writeJson(libraryFile(), { ...lib, folders });
 }
 
-/** `target` says where new files go: { kind: 'book' | 'paper', folder?: id }. */
+/** `target` says where new files go: { folder?: id }. */
 async function importPaths(paths, target = {}) {
-  const kind = target.kind === 'paper' ? 'paper' : 'book';
   return serial(async () => {
     const books = await loadBooks();
     await fs.mkdir(path.join(root(), 'books'), { recursive: true });
@@ -110,8 +114,7 @@ async function importPaths(paths, target = {}) {
         lastPage: 1,
         addedAt: Date.now(),
         openedAt: null,
-        kind,
-        ...(kind === 'paper' && target.folder ? { folder: target.folder } : {}),
+        ...(target.folder ? { folder: target.folder } : {}),
       });
     }
     await saveBooks(books);
@@ -143,13 +146,61 @@ const ocr = createOcr({
 
 const translator = createTranslator({
   getConfig: () => settings.translateConfig(),
+  getParsed: (id) => parser.load(id),
   translationFile,
-  bookFile,
   readJson,
   writeJson,
   getBook: async (id) => (await loadBooks()).find((b) => b.id === id),
   updateBook,
 });
+
+const parser = createParser({
+  getConfig: () => settings.translateConfig(),
+  dir: parsedDir,
+  bookFile,
+  readJson,
+  writeJson,
+  getBook: async (id) => (await loadBooks()).find((b) => b.id === id),
+  updateBook,
+  onReparsed: (id, before, after) => translator.remap(id, before, after),
+});
+
+/**
+ * Library format 2: books and papers in one list. Books from the old book shelf go
+ * into a folder 「书籍」; parses made inside the translation step move to parsed/<id>/.
+ * Runs once, before the window opens.
+ */
+async function migrateLibrary() {
+  const lib = await readJson(libraryFile(), {});
+  if (lib.version >= 2) return;
+  const books = lib.books ?? [];
+  const folders = lib.folders ?? [];
+  const shelved = books.filter((b) => b.kind !== 'paper');
+  if (shelved.length) {
+    let folder = folders.find((f) => f.name === '书籍');
+    if (!folder) folders.push((folder = { id: crypto.randomUUID(), name: '书籍' }));
+    for (const b of shelved) b.folder = folder.id;
+  }
+  // Each step can run again safely, should an earlier attempt have stopped halfway.
+  for (const b of books) {
+    delete b.kind;
+    const t = await readJson(translationFile(b.id), null);
+    if (t?.blocks) {
+      await parser.adopt(b.id, t.blocks, t.parsedAt);
+      const { blocks, mineruBatch, parsedAt, ...rest } = t;
+      const pages = b.pageCount || Math.max(1, ...blocks.flatMap((x) => x.parts.map((p) => p.page)));
+      await writeJson(translationFile(b.id), { ...rest, version: 2, ranges: [[1, pages]] });
+      if (b.translation?.state === 'done') b.translation.pages = pages;
+    } else if (t && t.version !== 2) {
+      // Stopped while MinerU was still parsing: that run can't be resumed in the new layout.
+      await fs.rm(translationFile(b.id), { force: true });
+      delete b.translation;
+    }
+    const parsed = await parser.load(b.id);
+    if (parsed) b.parse = { state: 'done', at: parsed.parsedAt, ...(parsed.legacy && { legacy: true }) };
+  }
+  await writeJson(libraryFile(), { ...lib, version: 2, books, folders });
+}
 
 // ---------- ipc ----------
 ipcMain.handle('library:list', () => loadBooks());
@@ -171,6 +222,7 @@ ipcMain.handle('library:update', (_e, id, patch) => updateBook(id, patch));
 
 ipcMain.handle('library:remove', (_e, id) => {
   ocr.cancel(id);
+  parser.cancel(id);
   translator.cancel(id);
   return serial(async () => {
     const books = (await loadBooks()).filter((b) => b.id !== id);
@@ -181,8 +233,53 @@ ipcMain.handle('library:remove', (_e, id) => {
     await fs.rm(ocrFile(id), { force: true });
     await fs.rm(annotationsFile(id), { force: true });
     await fs.rm(translationFile(id), { force: true });
+    await parser.remove(id);
     return books;
   });
+});
+
+// ---------- export ----------
+
+const fileName = (title) => String(title).replace(/[/\\:*?"<>|]/g, '_').trim() || 'export';
+
+/**
+ * Asks where to save, then writes what `make()` returns there.
+ * Resolves to { path }, { canceled: true }, or { error } with a message for the page.
+ */
+async function exportFile(e, name, filter, make) {
+  const res = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender), {
+    defaultPath: path.join(app.getPath('downloads'), name),
+    filters: [filter],
+  });
+  if (res.canceled || !res.filePath) return { canceled: true };
+  try {
+    await fs.writeFile(res.filePath, await make());
+    return { path: res.filePath };
+  } catch (err) {
+    return { error: err.message };
+  }
+}
+
+ipcMain.handle('export:pdf', async (e, bookId) => {
+  const book = (await loadBooks()).find((b) => b.id === bookId);
+  const data = await readJson(ocrFile(bookId), null);
+  if (!book || !data?.finishedAt) return { error: '这本书还没有完成 OCR' };
+  return exportFile(e, `${fileName(book.title)}（OCR）.pdf`, { name: 'PDF', extensions: ['pdf'] }, async () =>
+    exportOcrPdf(await fs.readFile(bookFile(bookId)), data, (done, total) =>
+      e.sender.send('export:progress', bookId, { done, total }),
+    ),
+  );
+});
+
+ipcMain.handle('export:md', async (e, bookId) => {
+  const book = (await loadBooks()).find((b) => b.id === bookId);
+  if (!book) return { error: '找不到这本书' };
+  // Checked before the save dialog, so nobody picks a place for a file that can't be made.
+  const parsed = await parser.load(bookId);
+  if (!parsed) return { error: '还没有解析' };
+  if (parsed.legacy) return { error: '这份解析结果是旧版本生成的，没有保存图片，需要重新解析才能导出' };
+  const name = fileName(book.title);
+  return exportFile(e, `${name}.zip`, { name: 'ZIP', extensions: ['zip'] }, () => parser.exportZip(bookId, name));
 });
 
 ipcMain.handle('folders:list', () => loadFolders());
@@ -257,7 +354,12 @@ ipcMain.handle('settings:saveOcrToken', async (_e, token) => {
 });
 ipcMain.handle('settings:clearOcrToken', () => settings.clearOcrToken());
 
-ipcMain.handle('translate:start', (_e, bookId) => translator.start(bookId));
+ipcMain.handle('parse:start', (_e, bookId, opts) => parser.start(bookId, opts));
+ipcMain.handle('parse:status', () => parser.status());
+
+// `range`: [from, to] pages to translate as well; none carries on with the ranges asked for before.
+ipcMain.handle('translate:start', (_e, bookId, range) => translator.start(bookId, range));
+ipcMain.handle('translate:estimate', (_e, bookId, from, to) => translator.estimate(bookId, from, to));
 ipcMain.handle('translate:status', () => translator.status());
 ipcMain.handle('translate:load', (_e, bookId) => translator.load(bookId));
 ipcMain.handle('translate:edit', (_e, bookId, id, text) => translator.edit(bookId, id, text));
@@ -365,12 +467,16 @@ function createWindow() {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // Packaged builds get the icon from the bundle; show it in the Dock during development too.
   if (!app.isPackaged) app.dock?.setIcon(path.join(__dirname, '..', 'build', 'icon.png'));
+  await serial(migrateLibrary).catch((err) =>
+    dialog.showErrorBox('书库升级失败', `${err.message}\n\n可以稍后重新打开应用再试，已经升级的部分不会重复处理。`),
+  );
   createWindow();
   loadBooks().then((books) => {
     ocr.resume(books);
+    parser.resume(books);
     translator.resume(books);
   });
   app.on('activate', () => {

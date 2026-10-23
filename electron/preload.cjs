@@ -31,7 +31,22 @@ contextBridge.exposeInMainWorld('api', {
   ocrTokenInfo: () => ipcRenderer.invoke('settings:ocrToken'),
   saveOcrToken: (token) => ipcRenderer.invoke('settings:saveOcrToken', token),
   clearOcrToken: () => ipcRenderer.invoke('settings:clearOcrToken'),
-  startTranslation: (bookId) => ipcRenderer.invoke('translate:start', bookId),
+  startParse: (bookId, opts) => ipcRenderer.invoke('parse:start', bookId, opts),
+  parseStatus: () => ipcRenderer.invoke('parse:status'),
+  onParseProgress: (fn) => {
+    const listener = (_e, bookId, progress) => fn(bookId, progress);
+    ipcRenderer.on('parse:progress', listener);
+    return () => ipcRenderer.removeListener('parse:progress', listener);
+  },
+  exportPdf: (bookId) => ipcRenderer.invoke('export:pdf', bookId),
+  exportMd: (bookId) => ipcRenderer.invoke('export:md', bookId),
+  onExportProgress: (fn) => {
+    const listener = (_e, bookId, progress) => fn(bookId, progress);
+    ipcRenderer.on('export:progress', listener);
+    return () => ipcRenderer.removeListener('export:progress', listener);
+  },
+  startTranslation: (bookId, range) => ipcRenderer.invoke('translate:start', bookId, range),
+  estimateTranslation: (bookId, from, to) => ipcRenderer.invoke('translate:estimate', bookId, from, to),
   translationStatus: () => ipcRenderer.invoke('translate:status'),
   loadTranslation: (bookId) => ipcRenderer.invoke('translate:load', bookId),
   editTranslation: (bookId, id, text) => ipcRenderer.invoke('translate:edit', bookId, id, text),

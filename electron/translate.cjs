@@ -1,11 +1,10 @@
-// Paper translation: MinerU parses the PDF into blocks, an OpenAI-compatible
-// model translates them paragraph by paragraph.
+// Translation: an OpenAI-compatible model translates the blocks of a finished parse
+// (see parse.cjs), paragraph by paragraph.
 //
-//   MinerU  POST /file-urls/batch -> PUT the file -> GET /extract-results/batch/{id}
-//           -> zip with *_content_list.json (blocks in reading order, 0–1000 page boxes)
-//   build   content list -> reading-order blocks: running headers, cover pages and
-//           misfiled notes fixed, paragraphs cut by a page break joined again
-//   LLM     a glossary from the whole paper, then batches of paragraphs
+//   glossary  terms from the start of the whole text, so every part is translated alike
+//   ranges    long PDFs are translated a page range at a time; the ranges asked for are
+//             kept, and a paragraph belongs to the page it starts on
+//   batches   paragraphs in those ranges that have no translation yet
 //
 // Everything lives in <library>/translations/<id>.json and is saved after each
 // batch, so finished paragraphs show right away and a run resumes after a restart.
@@ -13,19 +12,11 @@
 // wording, which a later machine run never overwrites.
 
 const { BrowserWindow, net } = require('electron');
-const fs = require('node:fs/promises');
-const { unzipSync, strFromU8 } = require('fflate');
-
-const MINERU = 'https://mineru.net/api/v4';
-const MAX_PAGES = 200;
-const MAX_BYTES = 200 * 1024 * 1024;
 
 class TranslateError extends Error {
-  /** `retry`: worth trying the same request again. `resubmit`: the MinerU task failed; only a new one can help. */
-  constructor(message, { retry = false, resubmit = false } = {}) {
+  constructor(message, { retry = false } = {}) {
     super(message);
     this.retry = retry;
-    this.resubmit = resubmit;
   }
 }
 
@@ -51,237 +42,37 @@ async function request(url, init = {}, timeout = 60_000) {
   }
 }
 
-// ---------- MinerU ----------
-
-async function mineruCall(key, path, init = {}) {
-  const res = await request(`${MINERU}${path}`, {
-    ...init,
-    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...init.headers },
-  });
-  if (res.status === 401 || res.status === 403) throw new TranslateError('MinerU 密钥无效，请在「设置」中检查');
-  if (res.status === 429 || res.status >= 500) throw new TranslateError(`MinerU 暂不可用（${res.status}）`, { retry: true });
-  let body = null;
-  try {
-    body = await res.json();
-  } catch {
-    // Gateway error pages.
-  }
-  if (!body) throw new TranslateError(`MinerU 返回格式异常（${res.status}）`, { retry: res.status >= 500 });
-  return body;
-}
-
-/** Checks a key without using quota: an unknown task answers -60012 to a valid key, 401 otherwise. */
-async function checkMineru(key) {
-  try {
-    const body = await mineruCall(key, '/extract-results/batch/00000000-0000-0000-0000-000000000000');
-    return body.code === 0 || body.code === -60012 ? null : `MinerU：${body.msg}`;
-  } catch (err) {
-    return err.message;
-  }
-}
-
-async function mineruSubmit(cfg, name, bytes) {
-  const body = await mineruCall(cfg.mineruKey, '/file-urls/batch', {
-    method: 'POST',
-    body: JSON.stringify({
-      files: [{ name: 'paper.pdf', data_id: name }],
-      model_version: cfg.mineruModel || 'vlm',
-      enable_formula: true,
-      enable_table: true,
-    }),
-  });
-  if (body.code !== 0) throw new TranslateError(`MinerU 拒绝了任务：${body.msg}`);
-  const { batch_id: batchId, file_urls: urls } = body.data;
-  // The signed upload URL rejects a Content-Type header.
-  const put = await request(urls[0], { method: 'PUT', body: bytes }, 10 * 60_000);
-  if (!put.ok) throw new TranslateError(`上传 PDF 失败（${put.status}）`, { retry: put.status >= 500 });
-  return batchId;
-}
-
-/** Polls until the parse is done; returns the content list. `onPages(done, total)` reports progress. */
-async function mineruResult(cfg, batchId, onPages, isCancelled) {
-  let wait = 3000;
-  for (;;) {
-    if (isCancelled()) return null;
-    const body = await withRetry(() => mineruCall(cfg.mineruKey, `/extract-results/batch/${batchId}`));
-    if (body.code === -60012) return 'expired';
-    if (body.code !== 0) throw new TranslateError(`MinerU：${body.msg}`);
-    const r = body.data.extract_result?.[0];
-    if (r?.state === 'failed') throw new TranslateError(`解析失败：${r.err_msg || '未知原因'}`, { resubmit: true });
-    if (r?.state === 'done') {
-      const res = await withRetry(() => request(r.full_zip_url, {}, 5 * 60_000));
-      if (!res.ok) throw new TranslateError(`下载解析结果失败（${res.status}）`, { retry: res.status >= 500 });
-      const files = unzipSync(new Uint8Array(await res.arrayBuffer()), {
-        filter: (f) => f.name.endsWith('_content_list.json'),
-      });
-      const list = Object.values(files)[0];
-      if (!list) throw new TranslateError('解析结果里没有内容列表');
-      return JSON.parse(strFromU8(list));
-    }
-    const p = r?.extract_progress;
-    if (p?.total_pages) onPages(p.extracted_pages ?? 0, p.total_pages);
-    await sleep(wait);
-    wait = Math.min(10_000, wait * 1.3);
-  }
-}
-
-// ---------- build: content list -> reading-order blocks ----------
-
-const SKIP = new Set(['header', 'footer', 'page_number', 'aside_text', 'page_header', 'page_footer']);
-// Ends a sentence, allowing closing quotes/brackets and a footnote marker after it.
-const SENTENCE_END = /[.!?:;…]['"’”)\]]*\s*(<sup>[^<]*<\/sup>)?\s*$/;
-const NOTE_MARK = /^\s*(<sup>|\d+[\s.)]|[*†‡§])/;
-// Publisher boilerplate that MinerU files as footnotes.
-const BOILERPLATE = /^http|Copyright|©|Downloaded from/i;
-// Cover pages that databases and repositories put in front of a paper.
-const COVER = new RegExp(
-  [
-    'Downloaded from', 'Permissions:', 'Published by', 'Citation:', 'Subscriptions:', 'Reprints:',
-    'Email Alerts', 'Additional services', 'institutional repository', 'made available online',
-    'final version of this paper', 'Terms (of use|and Conditions)', 'JSTOR', 'For more information',
-    'This article (was|is) downloaded', 'Citations?:\\s*http', 'online version of this article',
-  ].join('|'),
-  'i',
-);
-// Endnotes written out as body text: "Note 69: …".
-const ENDNOTE = /^(Note|Notes?)\s*\d+\s*[:.]|^注\s*\d+/;
-// A bibliography entry: "Surname, F. … (2000) …".
-const REF_LIKE = /^[A-ZÀ-Ž][\p{L}\p{N}_'’-]+(,| and| &)\s.*\b(1[89]|20)\d\d[a-z]?\b/u;
-
-// Lost italics leave a space before punctuation: "security ." -> "security."
-const clean = (t = '') =>
-  t.replace(/([\p{L}\p{N}_]) ([.,;:!?)])/gu, '$1$2').replace(/[ \t]+/g, ' ').trim();
-
-function build(content) {
-  // Running headers MinerU sometimes reads as body text: the same short line on 3+ pages.
-  const pagesOf = new Map();
-  for (const b of content) {
-    const t = clean(b.text);
-    if (b.type === 'text' && t && t.length < 120) {
-      if (!pagesOf.has(t)) pagesOf.set(t, new Set());
-      pagesOf.get(t).add(b.page_idx);
-    }
-  }
-  const running = new Set([...pagesOf].filter(([, p]) => p.size >= 3).map(([t]) => t));
-
-  const blocks = [];
-  content.forEach((b, i) => {
-    const kind = b.type;
-    const block = { id: `b${String(i).padStart(4, '0')}`, parts: [{ page: b.page_idx + 1, bbox: b.bbox }] };
-    const text = clean(b.text);
-    if (SKIP.has(kind)) Object.assign(block, { kind: 'skipped', label: kind, text });
-    else if (kind === 'text' && !text) Object.assign(block, { kind: 'skipped', label: 'empty', text: '' });
-    else if (kind === 'text' && running.has(text)) Object.assign(block, { kind: 'skipped', label: 'header', text });
-    else if (kind === 'text' && b.text_level) Object.assign(block, { kind: 'heading', level: b.text_level, text });
-    else if (kind === 'text') Object.assign(block, { kind: 'para', text });
-    else if (kind === 'list') Object.assign(block, { kind: 'list', items: (b.list_items ?? []).map(clean) });
-    else if (kind === 'ref_text') Object.assign(block, { kind: 'ref', text });
-    else if (kind === 'page_footnote') {
-      const prev = [...blocks].reverse().find((x) => x.kind === 'para');
-      if (BOILERPLATE.test(text)) Object.assign(block, { kind: 'skipped', label: 'footer', text });
-      // A long indented quotation, introduced by "…:", mistaken for a footnote.
-      else if (!NOTE_MARK.test(text) && prev?.text.trimEnd().endsWith(':')) Object.assign(block, { kind: 'quote', text });
-      else Object.assign(block, { kind: 'note', text });
-    } else if (kind === 'equation') Object.assign(block, { kind: 'equation', latex: b.text ?? '' });
-    else if (kind === 'code') Object.assign(block, { kind: 'equation', latex: b.code_body ?? '' });
-    else if (kind === 'image' || kind === 'table' || kind === 'chart')
-      Object.assign(block, {
-        kind: kind === 'table' ? 'table' : 'image',
-        html: b.table_body || undefined,
-        caption: clean((b.image_caption ?? b.table_caption ?? []).join(' ')) || undefined,
-        footnote: clean((b.image_footnote ?? b.table_footnote ?? []).join(' ')) || undefined,
-      });
-    else Object.assign(block, { kind: 'para', text });
-    blocks.push(block);
-  });
-  reclassify(blocks);
-  return mergeAcrossPages(blocks);
-}
-
-/** Fix what MinerU's block types get wrong, in place. */
-function reclassify(blocks) {
-  const page = (b) => b.parts[0].page;
-  // Cover pages: among the first two, a page with several publisher lines.
-  const hits = {};
-  for (const b of blocks) if (page(b) <= 2 && COVER.test(b.text ?? '')) hits[page(b)] = (hits[page(b)] ?? 0) + 1;
-  for (const b of blocks) {
-    if (b.kind !== 'skipped' && hits[page(b)] >= 2) Object.assign(b, { kind: 'skipped', label: 'cover' });
-    else if (b.kind === 'para' && COVER.test(b.text) && b.text.length < 200) Object.assign(b, { kind: 'skipped', label: 'footer' });
-  }
-
-  const body = blocks.filter((b) => b.kind !== 'skipped');
-  let section = null;
-  body.forEach((b, i) => {
-    if (b.kind === 'heading') {
-      const t = b.text.trim().toLowerCase();
-      section = /^(end)?notes?$/.test(t) ? 'notes' : /^(references|bibliography|works cited|literature)$/.test(t) ? 'refs' : null;
-      return;
-    }
-    // Endnotes ("12. See also …") that MinerU filed as references or body text. MinerU's own
-    // reference calls are trusted unless numbered; a heading isn't enough on its own, since
-    // one paper's bibliography is headed "Notes".
-    const numbered = /^\d{1,3}\.\s/.test(b.text ?? '');
-    if (
-      section !== 'refs' &&
-      ((b.kind === 'ref' && numbered) ||
-        (b.kind === 'para' && (numbered || (section === 'notes' && !REF_LIKE.test(b.text)))))
-    ) {
-      Object.assign(b, { kind: 'note', endnote: true });
-      return;
-    }
-    if (b.kind !== 'para') return;
-    if (ENDNOTE.test(b.text)) Object.assign(b, { kind: 'note', endnote: true });
-    else if (REF_LIKE.test(b.text)) {
-      // A bibliography entry MinerU missed: it sits among recognized ones.
-      const near = [...body.slice(Math.max(0, i - 2), i), ...body.slice(i + 1, i + 3)];
-      if (near.filter((x) => x.kind === 'ref').length >= 2) b.kind = 'ref';
-    }
-  });
-}
-
-/**
- * Join a paragraph cut at a page end with its continuation on a later page: the last
- * paragraph (or endnote) before a page change that doesn't end a sentence, or whose
- * continuation starts in lowercase. Headers, footers, footnotes and figures between are skipped.
- */
-function mergeAcrossPages(blocks) {
-  const out = [];
-  let open = null;
-  for (const b of blocks) {
-    if (b.kind === 'para') {
-      const prev = open != null ? out[open] : null;
-      if (prev && b.parts[0].page > prev.parts.at(-1).page &&
-          (!SENTENCE_END.test(prev.text) || /^[a-z(“"‘'—–-]/.test(b.text))) {
-        const hyphen = prev.text.endsWith('-') && !prev.text.endsWith('--');
-        prev.text = (hyphen ? prev.text.slice(0, -1) : prev.text + ' ') + b.text;
-        prev.parts.push(...b.parts);
-        continue;
-      }
-      out.push(b);
-      open = out.length - 1;
-    } else {
-      out.push(b);
-      if (b.endnote) open = out.length - 1;
-      else if (!['skipped', 'note', 'image', 'table', 'equation'].includes(b.kind)) open = null;
-    }
-  }
-  return out;
-}
-
-/** [id, text, kind] for everything the model translates. References stay in the original. */
+/** [id, text, kind, page] for everything the model translates. References stay in the original. */
 function pieces(blocks) {
   const out = [];
   for (const b of blocks) {
-    if (['para', 'heading', 'note', 'quote'].includes(b.kind)) out.push([b.id, b.text, b.kind]);
-    else if (b.kind === 'list') b.items.forEach((t, j) => out.push([`${b.id}.${j}`, t, 'list']));
+    const page = b.parts[0].page;
+    if (['para', 'heading', 'note', 'quote'].includes(b.kind)) out.push([b.id, b.text, b.kind, page]);
+    else if (b.kind === 'list') b.items.forEach((t, j) => out.push([`${b.id}.${j}`, t, 'list', page]));
     else if (b.kind === 'image' || b.kind === 'table') {
-      if (b.caption) out.push([`${b.id}.caption`, b.caption, 'caption']);
-      if (b.footnote) out.push([`${b.id}.footnote`, b.footnote, 'caption']);
-      if (b.html) out.push([`${b.id}.html`, b.html, 'table']);
+      if (b.caption) out.push([`${b.id}.caption`, b.caption, 'caption', page]);
+      if (b.footnote) out.push([`${b.id}.footnote`, b.footnote, 'caption', page]);
+      if (b.html) out.push([`${b.id}.html`, b.html, 'table', page]);
     }
   }
   return out;
 }
+
+// ---------- page ranges ----------
+
+/** Ranges as sorted, merged [from, to] pairs, with `range` added. */
+function addRange(ranges = [], range) {
+  const out = [];
+  for (const [from, to] of [...ranges, range].sort((a, b) => a[0] - b[0])) {
+    const last = out.at(-1);
+    if (last && from <= last[1] + 1) last[1] = Math.max(last[1], to);
+    else out.push([from, to]);
+  }
+  return out;
+}
+const inRanges = (ranges = [], page) => ranges.some(([from, to]) => page >= from && page <= to);
+const pagesIn = (ranges = [], total) =>
+  ranges.reduce((n, [from, to]) => n + Math.max(0, Math.min(to, total || to) - from + 1), 0);
 
 // ---------- LLM ----------
 
@@ -420,19 +211,24 @@ async function translateBatch(cfg, state, batch, context) {
   return out;
 }
 
+
 // ---------- runner ----------
+
+const fresh = () => ({ version: 2, pieces: {}, ranges: [] });
+const norm = (t = '') => t.replace(/\s+/g, ' ').trim();
 
 /**
  * @param deps.translationFile(id) path of the result file
- * @param deps.bookFile(id) path of the stored pdf
+ * @param deps.getParsed(id) the finished parse ({ blocks, total }), or null
  * @param deps.getConfig() settings.translateConfig()
  * @param deps.readJson / writeJson / getBook / updateBook  storage helpers from main
  */
 function createTranslator(deps) {
-  const { translationFile, bookFile, readJson, writeJson, getBook, updateBook, getConfig } = deps;
+  const { translationFile, readJson, writeJson, getBook, updateBook, getConfig, getParsed } = deps;
   const waiting = [];
   const progress = new Map();
   const cancelled = new Set();
+  const again = new Set(); // asked for more pages while running
   let running = null;
 
   // Every change to a translation file goes through here, one at a time per book,
@@ -443,15 +239,14 @@ function createTranslator(deps) {
     chains.set(bookId, next.catch(() => {}));
     return next;
   }
-  const update = (bookId, fn) =>
+  /** `fallback` is the state to start from when the file doesn't exist yet. */
+  const update = (bookId, fn, fallback = null) =>
     serial(bookId, async () => {
-      const state = await readJson(translationFile(bookId), null);
+      const state = await readJson(translationFile(bookId), fallback);
       const result = await fn(state);
       if (state) await writeJson(translationFile(bookId), state);
       return result;
     });
-  // Replaces the file whole; going through `update` would write the old state back over it.
-  const create = (bookId, state) => serial(bookId, () => writeJson(translationFile(bookId), state));
 
   const report = (bookId, p) => {
     progress.set(bookId, p);
@@ -461,68 +256,40 @@ function createTranslator(deps) {
   async function run(bookId) {
     const book = await getBook(bookId);
     if (!book) return;
+    const parsed = await getParsed(bookId);
+    if (!parsed) throw new TranslateError('翻译前需要先解析');
     const cfg = await getConfig();
-    if (!cfg.mineruKey) throw new TranslateError('还没有设置 MinerU 密钥，请在「设置」中填写');
     if (!cfg.llmBaseUrl || !cfg.llmModel || !cfg.llmKey) throw new TranslateError('还没有设置翻译模型，请在「设置」中填写');
+    const pageCount = parsed.total || book.pageCount;
     await updateBook(bookId, { translation: { state: 'running' } });
     const stop = () => cancelled.has(bookId);
 
-    // 1. Parse (resumes polling a task submitted before a restart).
-    let state = await readJson(translationFile(bookId), null);
-    if (!state?.blocks) {
-      if (book.pageCount > MAX_PAGES) throw new TranslateError(`MinerU 一次最多解析 ${MAX_PAGES} 页`);
-      const bytes = await fs.readFile(bookFile(bookId));
-      if (bytes.length > MAX_BYTES) throw new TranslateError('PDF 超过 200 MB，MinerU 无法解析');
-      for (;;) {
-        let batchId = state?.mineruBatch;
-        if (!batchId) {
-          report(bookId, { state: 'parsing', done: 0, total: book.pageCount || 0 });
-          batchId = await withRetry(() => mineruSubmit(cfg, bookId, bytes));
-          if (stop()) return;
-          state = { version: 1, mineruBatch: batchId, pieces: {} };
-          await create(bookId, state);
-        }
-        let content;
-        try {
-          content = await mineruResult(
-            cfg,
-            batchId,
-            (done, total) => report(bookId, { state: 'parsing', done, total }),
-            stop,
-          );
-        } catch (err) {
-          // Polling a failed task only fails again: forget it, so a retry submits the file anew.
-          if (err.resubmit) await update(bookId, async (s) => s && Object.assign(s, { mineruBatch: null }));
-          throw err;
-        }
-        if (stop() || content == null) return;
-        if (content === 'expired') {
-          state.mineruBatch = null; // the task is gone: submit again
-          continue;
-        }
-        const blocks = build(content);
-        state = await update(bookId, async (s) => Object.assign(s, { blocks, mineruBatch: null, parsedAt: Date.now() }));
-        break;
-      }
-    }
-    state = await readJson(translationFile(bookId), null);
-    const list = pieces(state.blocks);
+    let state = await update(
+      bookId,
+      async (s) => {
+        if (!s.ranges?.length) s.ranges = [[1, pageCount]];
+        return s;
+      },
+      fresh(),
+    );
+    const all = pieces(parsed.blocks);
+    const list = all.filter((p) => inRanges(state.ranges, p[3]));
     const total = list.length;
     const done = () => list.filter(([id]) => state.pieces[id]?.mt != null).length;
     const tell = () => report(bookId, { state: 'translating', done: done(), total });
     tell();
 
-    // 2. Glossary.
+    // 1. Glossary, from the start of the whole text, shared by every range.
     if (!state.terms) {
-      const text = list.filter(([, , k]) => k !== 'table').map(([, t]) => t).join('\n\n').slice(0, 120_000);
+      const text = all.filter(([, , k]) => k !== 'table').map(([, t]) => t).join('\n\n').slice(0, 120_000);
       const g = parseGlossary(await chat(cfg, GLOSSARY_PROMPT, text));
       if (stop()) return;
       state = await update(bookId, async (s) => Object.assign(s, g, { model: cfg.llmModel }));
     }
 
-    // 3. Paragraphs, several batches at once.
-    const order = list.map(([id]) => id);
-    const textOf = Object.fromEntries(list.map(([id, t]) => [id, t]));
+    // 2. Paragraphs in the ranges, several batches at once.
+    const order = all.map(([id]) => id);
+    const textOf = Object.fromEntries(all.map(([id, t]) => [id, t]));
     const context = (id) => {
       const i = order.indexOf(id);
       return i > 0 ? textOf[order[i - 1]].slice(-600) : '';
@@ -559,8 +326,9 @@ function createTranslator(deps) {
     const missing = total - done();
     if (missing) throw new TranslateError(`有 ${missing} 段没有译出，点「重试」补上`);
 
-    await update(bookId, async (s) => Object.assign(s, { finishedAt: Date.now() }));
-    await updateBook(bookId, { translation: { state: 'done', at: Date.now() } });
+    const at = Date.now();
+    await update(bookId, async (s) => Object.assign(s, { finishedAt: at }));
+    await updateBook(bookId, { translation: { state: 'done', at, pages: Math.min(pageCount, pagesIn(state.ranges, pageCount)) } });
     report(bookId, { state: 'done', done: total, total });
   }
 
@@ -572,18 +340,26 @@ function createTranslator(deps) {
       try {
         await run(bookId);
       } catch (err) {
-        if (cancelled.has(bookId)) continue;
-        const error = err instanceof TranslateError ? err.message : `出错了：${err.message}`;
-        await updateBook(bookId, { translation: { state: 'failed', error } });
-        report(bookId, { state: 'failed', error });
+        if (!cancelled.has(bookId)) {
+          const error = err instanceof TranslateError ? err.message : `出错了：${err.message}`;
+          await updateBook(bookId, { translation: { state: 'failed', error } });
+          report(bookId, { state: 'failed', error });
+        }
       }
+      if (again.delete(bookId) && !cancelled.has(bookId)) waiting.push(bookId);
     }
     running = null;
   }
 
   return {
-    start(bookId) {
-      if (running === bookId || waiting.includes(bookId)) return;
+    /** Translate `range` ([from, to] pages) too, or carry on with the ranges asked for before. */
+    async start(bookId, range) {
+      if (range) {
+        const [from, to] = range.map((n) => Math.max(1, Math.round(Number(n)))).sort((a, b) => a - b);
+        await update(bookId, async (s) => Object.assign(s, { ranges: addRange(s.ranges, [from, to]) }), fresh());
+      }
+      if (running === bookId) return void again.add(bookId);
+      if (waiting.includes(bookId)) return;
       waiting.push(bookId);
       report(bookId, { state: 'queued' });
       pump();
@@ -598,8 +374,22 @@ function createTranslator(deps) {
     resume(books) {
       for (const b of books) if (b.translation?.state === 'running') this.start(b.id);
     },
-    /** Waits for pending writes, then reads. */
-    load: (bookId) => update(bookId, async (s) => s),
+    /** The parse's blocks with their translations, waiting for pending writes; null before a parse. */
+    async load(bookId) {
+      const parsed = await getParsed(bookId);
+      const t = await update(bookId, async (s) => s);
+      if (!parsed && !t) return null;
+      return { ...fresh(), ...t, blocks: parsed?.blocks };
+    },
+    /** What translating pages from–to would take: pieces and characters still to do, pieces done. */
+    async estimate(bookId, from, to) {
+      const parsed = await getParsed(bookId);
+      if (!parsed) return null;
+      const t = await readJson(translationFile(bookId), null);
+      const list = pieces(parsed.blocks).filter(([, , , page]) => page >= from && page <= to);
+      const todo = list.filter(([id]) => t?.pieces?.[id]?.mt == null);
+      return { pieces: todo.length, chars: todo.reduce((n, [, text]) => n + text.length, 0), done: list.length - todo.length };
+    },
     /** The reader's own wording for a piece; null goes back to the machine translation. */
     edit: (bookId, id, text) =>
       update(bookId, async (s) => {
@@ -612,10 +402,11 @@ function createTranslator(deps) {
       }),
     /** Ask the model again for one piece. The new machine wording replaces any edit. */
     async retranslate(bookId, id) {
-      const s = await this.load(bookId);
-      const list = pieces(s?.blocks ?? []);
+      const parsed = await getParsed(bookId);
+      const s = await update(bookId, async (st) => st);
+      const list = pieces(parsed?.blocks ?? []);
       const i = list.findIndex(([pid]) => pid === id);
-      if (i < 0 || !s.terms) throw new TranslateError('这段还不能重译');
+      if (i < 0 || !s?.terms) throw new TranslateError('这段还不能重译');
       const got = await translateBatch(await getConfig(), s, [list[i]], i > 0 ? list[i - 1][1].slice(-600) : '');
       if (!got[id]) throw new TranslateError('模型没有返回这一段');
       return update(bookId, async (st) => {
@@ -623,7 +414,22 @@ function createTranslator(deps) {
         return st.pieces[id];
       });
     },
+    /**
+     * A new parse renumbered the blocks: carry each translation (and the reader's edits)
+     * over to the piece with the same source text. Pieces that don't match are untranslated.
+     */
+    remap: (bookId, before, after) =>
+      update(bookId, async (s) => {
+        if (!s) return;
+        const byText = new Map(pieces(after).map(([id, text]) => [norm(text), id]));
+        const next = {};
+        for (const [id, text] of pieces(before)) {
+          const to = byText.get(norm(text));
+          if (to && s.pieces[id] && !next[to]) next[to] = s.pieces[id];
+        }
+        s.pieces = next;
+      }),
   };
 }
 
-module.exports = { createTranslator, checkMineru, checkLlm, build, pieces };
+module.exports = { createTranslator, checkLlm, pieces, addRange, pagesIn };

@@ -5,9 +5,7 @@ export interface Book {
   lastPage: number;
   addedAt: number;
   openedAt: number | null;
-  /** Which shelf it sits on. Missing on records made before papers existed: a book. */
-  kind?: ShelfKind;
-  /** Papers only: the folder it's filed under; missing or null when uncategorized. */
+  /** The folder it's filed under; missing or null when uncategorized. */
   folder?: string | null;
   /** Detected once in the background: real text, an OCR layer over scans, or scans only. */
   textLayer?: TextLayerKind;
@@ -19,15 +17,18 @@ export interface Book {
   bodyStart?: number;
   /** Don't explain again that pages before the body get a [p x] placeholder. */
   citeHintOff?: boolean;
-  /** Papers: translation run (MinerU parse + LLM), kept in translations/<id>.json. */
-  translation?: { state: 'running' | 'done' | 'failed'; at?: number; error?: string };
+  /**
+   * MinerU parse, kept in parsed/<id>/. `legacy`: made before parsing was its own
+   * step; it has no images, so exporting .md needs a new parse.
+   */
+  parse?: { state: 'running' | 'done' | 'failed'; at?: number; error?: string; legacy?: boolean };
+  /** Translation of the parse, kept in translations/<id>.json. `pages`: how many pages the finished ranges cover. */
+  translation?: { state: 'running' | 'done' | 'failed'; at?: number; error?: string; pages?: number };
   /** Hosted OCR run (PaddleOCR), kept apart from the PDF's own text. */
   ocr?: { state: 'running' | 'done' | 'failed'; model?: string; at?: number; error?: string };
 }
 
-export type ShelfKind = 'book' | 'paper';
-
-/** A category in the paper library. */
+/** A category in the library. */
 export interface Folder {
   id: string;
   name: string;
@@ -35,9 +36,19 @@ export interface Folder {
 
 /** Where imported files go. */
 export interface ImportTarget {
-  kind: ShelfKind;
   folder?: string | null;
 }
+
+/** Live progress of a parse, in pages, pushed from the main process. */
+export interface ParseProgress {
+  state: 'queued' | 'parsing' | 'done' | 'failed';
+  done?: number;
+  total?: number;
+  error?: string;
+}
+
+/** How an export ended: saved to `path`, cancelled in the save dialog, or an error message. */
+export type ExportResult = { path: string } | { canceled: true } | { error: string };
 
 /** Live progress of an OCR run, pushed from the main process. */
 export interface OcrProgress {
@@ -50,8 +61,8 @@ export interface OcrProgress {
 }
 
 export interface TranslationProgress {
-  state: 'queued' | 'parsing' | 'translating' | 'done' | 'failed';
-  /** Pages parsed, or pieces translated. */
+  state: 'queued' | 'translating' | 'done' | 'failed';
+  /** Pieces translated, in the page ranges asked for. */
   done?: number;
   total?: number;
   error?: string;
@@ -66,7 +77,7 @@ export interface BlockPart {
 export type BlockKind =
   | 'heading' | 'para' | 'quote' | 'note' | 'ref' | 'list' | 'equation' | 'image' | 'table' | 'skipped';
 
-/** A paper block in reading order; a paragraph cut by a page break has one part per page. */
+/** A parsed block in reading order; a paragraph cut by a page break has one part per page. */
 export interface PaperBlock {
   id: string;
   kind: BlockKind;
@@ -76,6 +87,8 @@ export interface PaperBlock {
   items?: string[];
   latex?: string;
   html?: string;
+  /** Figures and tables: the image MinerU cut out, under parsed/<id>/. */
+  img?: string;
   caption?: string;
   footnote?: string;
   label?: string;
@@ -90,13 +103,25 @@ export interface TranslatedPiece {
   flag?: string;
 }
 
+/** The parsed blocks with their translations. */
 export interface PaperTranslation {
   blocks?: PaperBlock[];
   field?: string;
   terms?: { en: string; zh: string }[];
   model?: string;
   pieces: Record<string, TranslatedPiece>;
+  /** Page ranges asked to be translated, sorted and merged: [from, to]. */
+  ranges: [number, number][];
   finishedAt?: number;
+}
+
+/** What translating a page range would take. */
+export interface TranslationEstimate {
+  /** Pieces still to translate, and their characters. */
+  pieces: number;
+  chars: number;
+  /** Pieces in the range already translated. */
+  done: number;
 }
 
 /** Translation settings for the settings screen; secrets come masked. */
@@ -216,7 +241,7 @@ export interface Api {
   listFolders(): Promise<Folder[]>;
   addFolder(name: string): Promise<Folder[]>;
   renameFolder(id: string, name: string): Promise<Folder[]>;
-  /** Papers filed under it become uncategorized. */
+  /** Books filed under it become uncategorized. */
   removeFolder(id: string): Promise<{ books: Book[]; folders: Folder[] }>;
   readBook(id: string): Promise<Uint8Array>;
   listNotes(bookId: string): Promise<Partial<Notebook> | null>;
@@ -235,9 +260,21 @@ export interface Api {
   /** Verifies the token with the service, then stores it encrypted. Resolves to an error message, or null. */
   saveOcrToken(token: string): Promise<string | null>;
   clearOcrToken(): Promise<void>;
-  startTranslation(bookId: string): Promise<void>;
+  /** `force` parses again even when a parse is done. */
+  startParse(bookId: string, opts?: { force?: boolean }): Promise<void>;
+  parseStatus(): Promise<Record<string, ParseProgress>>;
+  onParseProgress(fn: (bookId: string, progress: ParseProgress | undefined) => void): () => void;
+  /** Asks where to save, then writes the PDF with its OCR text layer. */
+  exportPdf(bookId: string): Promise<ExportResult>;
+  /** Asks where to save, then writes a zip of the parse as .md with its images. */
+  exportMd(bookId: string): Promise<ExportResult>;
+  onExportProgress(fn: (bookId: string, progress: { done: number; total: number }) => void): () => void;
+  /** Translates `range` ([from, to] pages) too; without one, carries on with the ranges asked for before. */
+  startTranslation(bookId: string, range?: [number, number]): Promise<void>;
+  /** null until the book is parsed. */
+  estimateTranslation(bookId: string, from: number, to: number): Promise<TranslationEstimate | null>;
   translationStatus(): Promise<Record<string, TranslationProgress>>;
-  /** null until a translation was started. */
+  /** null until the book is parsed. */
   loadTranslation(bookId: string): Promise<PaperTranslation | null>;
   /** Save the reader's wording for a piece; null restores the machine translation. */
   editTranslation(bookId: string, id: string, text: string | null): Promise<TranslatedPiece | null>;

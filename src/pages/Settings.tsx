@@ -9,7 +9,7 @@ export default function Settings({ onClose }: { onClose(): void }) {
     <div className="settings">
       <div className="titlebar settings-titlebar">
         <button className="link back" onClick={onClose}>
-          ← 书库
+          ← 图书馆
         </button>
       </div>
 
@@ -81,7 +81,7 @@ function OcrTokenSection() {
     }
     setToken('');
     setReveal(false);
-    setMessage({ ok: true, text: '令牌有效，已加密保存。现在可以在书库里对扫描版的书点「OCR」了。' });
+    setMessage({ ok: true, text: '令牌有效，已加密保存。现在可以在图书馆里对扫描版的书点「OCR」了。' });
     refresh();
   };
 
@@ -188,7 +188,7 @@ function OcrTokenSection() {
         </ol>
 
         <ul className="settings-notes muted">
-          <li>令牌用系统钥匙串加密，只保存在这台电脑上，不会写进书库文件。</li>
+          <li>令牌用系统钥匙串加密，只保存在这台电脑上，不会写进图书馆的数据文件。</li>
           <li>令牌等同于你的账号凭证，不要发给别人。</li>
           <li>每个账号每天可免费识别 20,000 页，超出后第二天恢复。</li>
         </ul>
@@ -218,10 +218,10 @@ function TranslateSection() {
   return (
     <section className="settings-section">
       <div className="settings-label">
-        <h2>论文翻译</h2>
+        <h2>解析与翻译</h2>
         <p className="muted">MinerU · OpenAI 兼容接口</p>
         <p className="muted">
-          论文库里的论文可以整篇译成中文：MinerU 先解析版面（正文、标题、脚注、参考文献），再由你配置的大模型逐段翻译。阅读时译文和原文 PDF 并排对照。
+          MinerU 解析版面（标题、正文、脚注、参考文献、表格、公式、图片），解析结果可以导出为 .md；再由你配置的大模型逐段翻译成中文，阅读时译文和原文 PDF 并排对照。
         </p>
       </div>
       <div className="settings-body">
@@ -236,7 +236,7 @@ function TranslateSection() {
           ]}
           help={
             <>
-              在 MinerU 官网登录后创建 API 密钥。每个账号每天有 1,000 页高优先级解析额度，单篇不超过 200 页。{' '}
+              在 MinerU 官网登录后创建 API 密钥。每个账号每天有 1,000 页高优先级解析额度；超过 200 页的 PDF 会拆开解析。{' '}
               <a href={MINERU_PAGE} target="_blank" rel="noreferrer">
                 打开 MinerU 密钥页 ↗
               </a>
@@ -257,8 +257,8 @@ function TranslateSection() {
           help="任何兼容 OpenAI Chat Completions 的服务都可以，接口地址填到 /v1 为止。并发数是同时发出的请求数，越大越快，但要在服务商的速率限制以内。"
         />
         <ul className="settings-notes muted">
-          <li>密钥用系统钥匙串加密，只保存在这台电脑上，不会写进书库文件。</li>
-          <li>论文内容会发送给 MinerU 和你配置的模型服务商处理。</li>
+          <li>密钥用系统钥匙串加密，只保存在这台电脑上，不会写进图书馆的数据文件。</li>
+          <li>解析和翻译时，PDF 内容会发送给 MinerU 和你配置的模型服务商处理。</li>
         </ul>
       </div>
     </section>

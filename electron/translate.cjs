@@ -21,9 +21,11 @@ const MAX_PAGES = 200;
 const MAX_BYTES = 200 * 1024 * 1024;
 
 class TranslateError extends Error {
-  constructor(message, { retry = false } = {}) {
+  /** `retry`: worth trying the same request again. `resubmit`: the MinerU task failed; only a new one can help. */
+  constructor(message, { retry = false, resubmit = false } = {}) {
     super(message);
     this.retry = retry;
+    this.resubmit = resubmit;
   }
 }
 
@@ -105,7 +107,7 @@ async function mineruResult(cfg, batchId, onPages, isCancelled) {
     if (body.code === -60012) return 'expired';
     if (body.code !== 0) throw new TranslateError(`MinerU：${body.msg}`);
     const r = body.data.extract_result?.[0];
-    if (r?.state === 'failed') throw new TranslateError(`解析失败：${r.err_msg || '未知原因'}`);
+    if (r?.state === 'failed') throw new TranslateError(`解析失败：${r.err_msg || '未知原因'}`, { resubmit: true });
     if (r?.state === 'done') {
       const res = await withRetry(() => request(r.full_zip_url, {}, 5 * 60_000));
       if (!res.ok) throw new TranslateError(`下载解析结果失败（${res.status}）`, { retry: res.status >= 500 });
@@ -436,17 +438,20 @@ function createTranslator(deps) {
   // Every change to a translation file goes through here, one at a time per book,
   // so the runner's batches and the reader's edits never overwrite each other.
   const chains = new Map();
-  function update(bookId, fn) {
-    const next = (chains.get(bookId) ?? Promise.resolve()).then(async () => {
+  function serial(bookId, task) {
+    const next = (chains.get(bookId) ?? Promise.resolve()).then(task);
+    chains.set(bookId, next.catch(() => {}));
+    return next;
+  }
+  const update = (bookId, fn) =>
+    serial(bookId, async () => {
       const state = await readJson(translationFile(bookId), null);
       const result = await fn(state);
       if (state) await writeJson(translationFile(bookId), state);
       return result;
     });
-    chains.set(bookId, next.catch(() => {}));
-    return next;
-  }
-  const create = (bookId, state) => update(bookId, async () => writeJson(translationFile(bookId), state));
+  // Replaces the file whole; going through `update` would write the old state back over it.
+  const create = (bookId, state) => serial(bookId, () => writeJson(translationFile(bookId), state));
 
   const report = (bookId, p) => {
     progress.set(bookId, p);
@@ -477,12 +482,19 @@ function createTranslator(deps) {
           state = { version: 1, mineruBatch: batchId, pieces: {} };
           await create(bookId, state);
         }
-        const content = await mineruResult(
-          cfg,
-          batchId,
-          (done, total) => report(bookId, { state: 'parsing', done, total }),
-          stop,
-        );
+        let content;
+        try {
+          content = await mineruResult(
+            cfg,
+            batchId,
+            (done, total) => report(bookId, { state: 'parsing', done, total }),
+            stop,
+          );
+        } catch (err) {
+          // Polling a failed task only fails again: forget it, so a retry submits the file anew.
+          if (err.resubmit) await update(bookId, async (s) => s && Object.assign(s, { mineruBatch: null }));
+          throw err;
+        }
         if (stop() || content == null) return;
         if (content === 'expired') {
           state.mineruBatch = null; // the task is gone: submit again

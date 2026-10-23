@@ -20,8 +20,11 @@ const TRANSLATE_FIELDS = {
   llmWorkers: { default: 8 },
 };
 
-module.exports = function createSettings({ readJson, writeJson }) {
+module.exports = function createSettings({ readJson, writeJson, serial }) {
   const load = () => readJson(file(), {});
+  // Each change reads the whole file and writes it back, so changes take turns
+  // in main's write queue; otherwise two at once could lose one or collide on disk.
+  const change = (fn) => serial(async () => writeJson(file(), await fn(await load())));
 
   const decrypt = (value) => {
     if (!value) return null;
@@ -81,13 +84,9 @@ module.exports = function createSettings({ readJson, writeJson }) {
     },
     async saveOcrToken(token) {
       if (!safeStorage.isEncryptionAvailable()) throw new Error('系统钥匙串不可用，无法加密保存令牌');
-      const settings = await load();
-      await writeJson(file(), { ...settings, ocrToken: safeStorage.encryptString(token).toString('base64') });
+      await change((settings) => ({ ...settings, ocrToken: safeStorage.encryptString(token).toString('base64') }));
     },
-    async clearOcrToken() {
-      const { ocrToken: _, ...rest } = await load();
-      await writeJson(file(), rest);
-    },
+    clearOcrToken: () => change(({ ocrToken: _, ...rest }) => rest),
 
     /** Plain values for the main process: { mineruKey, mineruModel, llmBaseUrl, … }. */
     async translateConfig() {
@@ -105,22 +104,22 @@ module.exports = function createSettings({ readJson, writeJson }) {
       );
     },
     /** Saves the given fields; an empty string clears a field back to its fallback. */
-    async saveTranslate(patch) {
-      const settings = await load();
-      const next = { ...(settings.translate ?? {}) };
-      for (const [name, value] of Object.entries(patch)) {
-        const f = TRANSLATE_FIELDS[name];
-        if (!f) continue;
-        if (value === '' || value == null) {
-          delete next[name];
-        } else if (f.secret) {
-          if (!safeStorage.isEncryptionAvailable()) throw new Error('系统钥匙串不可用，无法加密保存密钥');
-          next[name] = safeStorage.encryptString(String(value).trim()).toString('base64');
-        } else {
-          next[name] = typeof f.default === 'number' ? Number(value) : String(value).trim();
+    saveTranslate: (patch) =>
+      change((settings) => {
+        const next = { ...(settings.translate ?? {}) };
+        for (const [name, value] of Object.entries(patch)) {
+          const f = TRANSLATE_FIELDS[name];
+          if (!f) continue;
+          if (value === '' || value == null) {
+            delete next[name];
+          } else if (f.secret) {
+            if (!safeStorage.isEncryptionAvailable()) throw new Error('系统钥匙串不可用，无法加密保存密钥');
+            next[name] = safeStorage.encryptString(String(value).trim()).toString('base64');
+          } else {
+            next[name] = typeof f.default === 'number' ? Number(value) : String(value).trim();
+          }
         }
-      }
-      await writeJson(file(), { ...settings, translate: next });
-    },
+        return { ...settings, translate: next };
+      }),
   };
 };

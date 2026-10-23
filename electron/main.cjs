@@ -22,12 +22,20 @@ if (process.env.READER_DATA_DIR) app.setPath('userData', process.env.READER_DATA
 
 const root = () => path.join(app.getPath('userData'), 'library');
 const libraryFile = () => path.join(root(), 'library.json');
-const bookFile = (id) => path.join(root(), 'books', `${id}.pdf`);
-const notesFile = (id) => path.join(root(), 'notes', `${id}.json`);
-const bookmarksFile = (id) => path.join(root(), 'bookmarks', `${id}.json`);
-const ocrFile = (id) => path.join(root(), 'ocr', `${id}.json`);
-const annotationsFile = (id) => path.join(root(), 'annotations', `${id}.json`);
-const translationFile = (id) => path.join(root(), 'translations', `${id}.json`);
+
+// Ids come from the page. Only ids made here (UUIDs) may name a file, so no
+// id can point outside the library, e.g. with "../".
+const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const fileOf = (dir, ext) => (id) => {
+  if (!ID.test(id)) throw new Error(`无效的编号：${id}`);
+  return path.join(root(), dir, `${id}.${ext}`);
+};
+const bookFile = fileOf('books', 'pdf');
+const notesFile = fileOf('notes', 'json');
+const bookmarksFile = fileOf('bookmarks', 'json');
+const ocrFile = fileOf('ocr', 'json');
+const annotationsFile = fileOf('annotations', 'json');
+const translationFile = fileOf('translations', 'json');
 
 // Missing files fall back to the default. A file that exists but can't be parsed
 // is moved aside first, so the next save can never overwrite the only copy.
@@ -121,7 +129,7 @@ function updateBook(id, patch) {
   });
 }
 
-const settings = createSettings({ readJson, writeJson });
+const settings = createSettings({ readJson, writeJson, serial });
 
 const ocr = createOcr({
   getToken: async () => (await settings.ocrToken()).token,

@@ -17,6 +17,18 @@ npm run dist:win  # 打包为 Windows 安装程序 .exe（x64），输出到 rel
 
 在 Apple 芯片的 Mac 上打 Windows 包需要先装 Rosetta（`softwareupdate --install-rosetta --agree-to-license`），因为 electron-builder 自带的 makensis 是 x86_64 程序。exe 未签名，首次运行时 SmartScreen 会提示，选「仍要运行」即可。
 
+## 发布
+
+GitHub Actions 会在云端同时打出 mac 和 Windows 两个安装包（`.github/workflows/release.yml`）：
+
+1. 改 `package.json` 里的版本号（如 `npm version 0.6.0 --no-git-tag-version`），提交。
+2. 打同名标签并推送：`git tag v0.6.0 && git push origin main v0.6.0`。标签必须和版本号一致，否则构建会直接报错。
+3. 大约十分钟后，仓库的 Releases 页面出现一个**草稿**，附带 `Reader-0.6.0-arm64.dmg` 和 `Reader Setup 0.6.0.exe`。检查无误后点「Publish release」才会公开。
+
+只想试打包、不发布时，在 Actions 页面选「Release」→「Run workflow」，安装包会作为这次运行的附件保存，不生成 Release。
+
+安装包没有签名：mac 第一次打开会被拦，到「系统设置 → 隐私与安全性」点「仍要打开」；Windows 会弹 SmartScreen，选「仍要运行」。
+
 ## 图书馆与分类
 
 - 所有 PDF 都在首页「图书馆」一个列表里，书和论文的阅读、笔记、书签、批注、OCR、解析、翻译完全相同。

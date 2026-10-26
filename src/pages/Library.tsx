@@ -83,7 +83,10 @@ function TextCell({
   if (!book.textLayer) return <span className="muted">{detectFailed ? '无法检测' : '检测中…'}</span>;
   return (
     <>
-      <span className={`tag tag-${book.textLayer}`} title={TEXT_HINT[book.textLayer]}>
+      <span
+        className={`tag tag-${book.textLayer}`}
+        title={book.format === 'epub' ? '由 EPUB 排成的 A5 PDF，文字可选中、可搜索' : TEXT_HINT[book.textLayer]}
+      >
         {TEXT_LABEL[book.textLayer]}
       </span>
       {book.textLayer === 'none' && (
@@ -403,6 +406,16 @@ export default function Library({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
   const dragDepth = useRef(0);
+  // EPUBs take a while to lay out, so the import button says so meanwhile.
+  const [importing, setImporting] = useState(false);
+  const runImport = async (load: () => Promise<Book[]>) => {
+    setImporting(true);
+    try {
+      setBooks(await load());
+    } finally {
+      setImporting(false);
+    }
+  };
 
   const [toast, setToast] = useState<string | null>(null);
   useEffect(() => {
@@ -498,8 +511,8 @@ export default function Library({
     e.preventDefault();
     dragDepth.current = 0;
     setDragging(false);
-    const files = [...e.dataTransfer.files].filter((f) => f.name.toLowerCase().endsWith('.pdf'));
-    if (files.length) setBooks(await api().importFiles(files, target(into)));
+    const files = [...e.dataTransfer.files].filter((f) => /\.(pdf|epub)$/i.test(f.name));
+    if (files.length) await runImport(() => api().importFiles(files, target(into)));
   };
 
   const rename = async (id: string, title: string) => {
@@ -538,8 +551,13 @@ export default function Library({
           <button className="btn btn-primary" onClick={onOpenSettings}>
             设置
           </button>
-          <button className="btn btn-primary" onClick={async () => setBooks(await api().importBooks(target()))}>
-            导入 PDF <span className="plus">+</span>
+          <button
+            className="btn btn-primary"
+            disabled={importing}
+            onClick={() => runImport(() => api().importBooks(target()))}
+            title="PDF 或 EPUB；EPUB 会排成 A5 大小的 PDF"
+          >
+            {importing ? '导入中…' : <>导入 PDF <span className="plus">+</span></>}
           </button>
         </div>
       </header>

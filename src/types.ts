@@ -7,6 +7,8 @@ export interface Book {
   openedAt: number | null;
   /** The folder it's filed under; missing or null when uncategorized. */
   folder?: string | null;
+  /** Imported from an EPUB, laid out once as an A5 PDF; the original is kept beside it. */
+  format?: 'epub';
   /** Detected once in the background: real text, an OCR layer over scans, or scans only. */
   textLayer?: TextLayerKind;
   bookmarkCount?: number;

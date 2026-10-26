@@ -6,6 +6,7 @@ const { createOcr, checkToken } = require('./ocr.cjs');
 const { exportOcrPdf } = require('./ocr-pdf.cjs');
 const { createParser, checkMineru } = require('./parse.cjs');
 const { createTranslator, checkLlm } = require('./translate.cjs');
+const { convertEpub } = require('./epub.cjs');
 const createSettings = require('./settings.cjs');
 
 const DEV_URL = 'http://localhost:5173';
@@ -15,7 +16,8 @@ if (process.env.READER_DATA_DIR) app.setPath('userData', process.env.READER_DATA
 
 // ---------- storage ----------
 // <userData>/library/library.json   book metadata and folders
-// <userData>/library/books/<id>.pdf copied pdf files
+// <userData>/library/books/<id>.pdf copied pdf files (for an EPUB, the A5 PDF made from it)
+// <userData>/library/books/<id>.epub the original of an imported EPUB
 // <userData>/library/notes/<id>.json notes of one book
 // <userData>/library/bookmarks/<id>.json bookmarks of one book
 // <userData>/library/ocr/<id>.json       hosted OCR results of one book
@@ -34,6 +36,7 @@ const fileOf = (dir, ext) => (id) => {
   return path.join(root(), dir, ext ? `${id}.${ext}` : id);
 };
 const bookFile = fileOf('books', 'pdf');
+const epubFile = fileOf('books', 'epub');
 const notesFile = fileOf('notes', 'json');
 const bookmarksFile = fileOf('bookmarks', 'json');
 const ocrFile = fileOf('ocr', 'json');
@@ -57,17 +60,17 @@ async function readJson(file, fallback) {
   } catch {
     const backup = `${file}.corrupt-${Date.now()}`;
     await fs.rename(file, backup);
-    // Attached to the window as a sheet, so it never blocks the app.
-    const win = BrowserWindow.getAllWindows()[0];
-    const opts = {
-      type: 'warning',
-      message: '数据文件已损坏',
-      detail: `无法读取 ${path.basename(file)}，原文件已备份为：\n${backup}`,
-    };
-    if (win) dialog.showMessageBox(win, opts);
-    else dialog.showMessageBox(opts);
+    warn('数据文件已损坏', `无法读取 ${path.basename(file)}，原文件已备份为：\n${backup}`);
     return fallback;
   }
+}
+
+// Attached to the window as a sheet, so it never blocks the app.
+function warn(message, detail) {
+  const win = BrowserWindow.getAllWindows()[0];
+  const opts = { type: 'warning', message, detail };
+  if (win) dialog.showMessageBox(win, opts);
+  else dialog.showMessageBox(opts);
 }
 
 async function writeJson(file, data) {
@@ -100,20 +103,43 @@ async function saveFolders(folders) {
 
 /** `target` says where new files go: { folder?: id }. */
 async function importPaths(paths, target = {}) {
+  // EPUBs are laid out as PDFs first, outside the write queue: that can take a while.
+  const items = [];
+  const failed = [];
+  for (const p of paths) {
+    const ext = path.extname(p).toLowerCase();
+    const title = path.basename(p, path.extname(p));
+    if (ext === '.pdf') items.push({ src: p, title });
+    if (ext !== '.epub') continue;
+    try {
+      const epub = await convertEpub(await fs.readFile(p));
+      items.push({ src: p, title: epub.title || title, epub });
+    } catch (err) {
+      failed.push(`${path.basename(p)}：${err.message}`);
+    }
+  }
+  if (failed.length) warn('有 EPUB 没能导入', failed.join('\n'));
   return serial(async () => {
     const books = await loadBooks();
     await fs.mkdir(path.join(root(), 'books'), { recursive: true });
-    for (const p of paths) {
-      if (path.extname(p).toLowerCase() !== '.pdf') continue;
+    for (const { src, title, epub } of items) {
       const id = crypto.randomUUID();
-      await fs.copyFile(p, bookFile(id));
+      if (epub) {
+        await fs.writeFile(bookFile(id), epub.pdf);
+        await fs.copyFile(src, epubFile(id));
+        await writeJson(bookmarksFile(id), epub.bookmarks);
+      } else {
+        await fs.copyFile(src, bookFile(id));
+      }
       books.unshift({
         id,
-        title: path.basename(p, path.extname(p)),
-        pageCount: 0,
+        title,
+        pageCount: epub?.pageCount ?? 0,
         lastPage: 1,
         addedAt: Date.now(),
         openedAt: null,
+        // An EPUB has no printed page numbers: citations use the PDF's.
+        ...(epub ? { format: 'epub', bodyStart: 1 } : {}),
         ...(target.folder ? { folder: target.folder } : {}),
       });
     }
@@ -208,9 +234,9 @@ ipcMain.handle('library:list', () => loadBooks());
 ipcMain.handle('library:import', async (e, target) => {
   const win = BrowserWindow.fromWebContents(e.sender);
   const res = await dialog.showOpenDialog(win, {
-    title: 'Import PDF',
+    title: 'Import PDF / EPUB',
     properties: ['openFile', 'multiSelections'],
-    filters: [{ name: 'PDF', extensions: ['pdf'] }],
+    filters: [{ name: 'PDF / EPUB', extensions: ['pdf', 'epub'] }],
   });
   if (res.canceled) return loadBooks();
   return importPaths(res.filePaths, target);
@@ -228,6 +254,7 @@ ipcMain.handle('library:remove', (_e, id) => {
     const books = (await loadBooks()).filter((b) => b.id !== id);
     await saveBooks(books);
     await fs.rm(bookFile(id), { force: true });
+    await fs.rm(epubFile(id), { force: true });
     await fs.rm(notesFile(id), { force: true });
     await fs.rm(bookmarksFile(id), { force: true });
     await fs.rm(ocrFile(id), { force: true });

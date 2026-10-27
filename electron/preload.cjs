@@ -40,6 +40,9 @@ contextBridge.exposeInMainWorld('api', {
   },
   exportPdf: (bookId) => ipcRenderer.invoke('export:pdf', bookId),
   exportMd: (bookId) => ipcRenderer.invoke('export:md', bookId),
+  exportTranslationPdf: (bookId, bilingual) => ipcRenderer.invoke('export:translationPdf', bookId, bilingual),
+  parsedImage: (bookId, name) => ipcRenderer.invoke('parse:image', bookId, name),
+  printReady: (error) => ipcRenderer.send('print:ready', error),
   onExportProgress: (fn) => {
     const listener = (_e, bookId, progress) => fn(bookId, progress);
     ipcRenderer.on('export:progress', listener);

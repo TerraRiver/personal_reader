@@ -473,11 +473,15 @@ export default function Library({
     () => api().onExportProgress((id, p) => setExporting((x) => (x?.id === id ? { id, ...p } : x))),
     [],
   );
-  const runExport = async (b: Book, kind: 'pdf' | 'md') => {
+  const runExport = async (b: Book, kind: 'pdf' | 'md' | 'translation' | 'bilingual') => {
     setExportId(null);
     if (kind === 'md' && b.parse?.legacy) return setDialog({ kind: 'reparse', book: b });
     setExporting({ id: b.id });
-    const res: ExportResult = await (kind === 'pdf' ? api().exportPdf(b.id) : api().exportMd(b.id));
+    const res: ExportResult = await (kind === 'pdf'
+      ? api().exportPdf(b.id)
+      : kind === 'md'
+        ? api().exportMd(b.id)
+        : api().exportTranslationPdf(b.id, kind === 'bilingual'));
     setExporting(null);
     if ('error' in res) setToast(`导出失败：${res.error}`);
     else if ('path' in res) setToast(`已导出：${res.path.split(/[/\\]/).pop()}`);
@@ -600,6 +604,7 @@ export default function Library({
               const progress = b.pageCount ? Math.round((b.lastPage / b.pageCount) * 100) : 0;
               const canPdf = b.ocr?.state === 'done';
               const canMd = b.parse?.state === 'done';
+              const canTranslation = canMd && !!b.translation;
               // A row keeps its tools open while something there needs attention.
               const busy = (s?: string) => s === 'queued' || s === 'running' || s === 'parsing' || s === 'translating';
               const attention =
@@ -719,6 +724,22 @@ export default function Library({
                                 title={canMd ? '解析结果：.md 和图片，打包成 .zip' : '解析后才能导出'}
                               >
                                 导出 .md
+                              </button>
+                              <button
+                                className="link small"
+                                disabled={!canTranslation}
+                                onClick={() => runExport(b, 'translation')}
+                                title={canTranslation ? '译文按原书大小重新排版，没翻译的部分保留原文' : '翻译后才能导出'}
+                              >
+                                译文 PDF
+                              </button>
+                              <button
+                                className="link small"
+                                disabled={!canTranslation}
+                                onClick={() => runExport(b, 'bilingual')}
+                                title={canTranslation ? '每段译文下附原文' : '翻译后才能导出'}
+                              >
+                                对照 PDF
                               </button>
                               <button className="link small" onClick={() => setExportId(null)}>
                                 取消

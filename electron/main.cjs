@@ -4,12 +4,14 @@ const fs = require('node:fs/promises');
 const crypto = require('node:crypto');
 const { createOcr, checkToken } = require('./ocr.cjs');
 const { exportOcrPdf } = require('./ocr-pdf.cjs');
+const { exportTranslationPdf } = require('./translation-pdf.cjs');
 const { createParser, checkMineru } = require('./parse.cjs');
 const { createTranslator, checkLlm } = require('./translate.cjs');
 const { convertEpub } = require('./epub.cjs');
 const createSettings = require('./settings.cjs');
 
 const DEV_URL = 'http://localhost:5173';
+const PRELOAD = path.join(__dirname, 'preload.cjs');
 
 // Lets development/testing point at a throwaway data directory.
 if (process.env.READER_DATA_DIR) app.setPath('userData', process.env.READER_DATA_DIR);
@@ -309,6 +311,17 @@ ipcMain.handle('export:md', async (e, bookId) => {
   return exportFile(e, `${name}.zip`, { name: 'ZIP', extensions: ['zip'] }, () => parser.exportZip(bookId, name));
 });
 
+ipcMain.handle('export:translationPdf', async (e, bookId, bilingual) => {
+  const book = (await loadBooks()).find((b) => b.id === bookId);
+  if (!book) return { error: '找不到这本书' };
+  const t = await translator.load(bookId);
+  if (!t?.blocks || !Object.keys(t.pieces).length) return { error: '还没有译文' };
+  const name = `${fileName(book.title)}（${bilingual ? '中英对照' : '译文'}）.pdf`;
+  return exportFile(e, name, { name: 'PDF', extensions: ['pdf'] }, async () =>
+    exportTranslationPdf(await fs.readFile(bookFile(bookId)), { bookId, bilingual, open: openApp, preload: PRELOAD }),
+  );
+});
+
 ipcMain.handle('folders:list', () => loadFolders());
 
 ipcMain.handle('folders:add', (_e, name) =>
@@ -383,6 +396,10 @@ ipcMain.handle('settings:clearOcrToken', () => settings.clearOcrToken());
 
 ipcMain.handle('parse:start', (_e, bookId, opts) => parser.start(bookId, opts));
 ipcMain.handle('parse:status', () => parser.status());
+// A figure of the parse, for the translation PDF; null when it's missing (old parses have none).
+ipcMain.handle('parse:image', (_e, bookId, name) =>
+  fs.readFile(path.join(parsedDir(bookId), 'images', path.basename(String(name)))).catch(() => null),
+);
 
 // `range`: [from, to] pages to translate as well; none carries on with the ranges asked for before.
 ipcMain.handle('translate:start', (_e, bookId, range) => translator.start(bookId, range));
@@ -454,7 +471,7 @@ function createWindow() {
         { titleBarStyle: 'hidden', titleBarOverlay: { color: '#ffffff', symbolColor: '#0a0a0a', height: 52 } }),
     backgroundColor: '#ffffff',
     webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
+      preload: PRELOAD,
       contextIsolation: true,
       sandbox: true,
     },
@@ -487,11 +504,15 @@ function createWindow() {
     win.webContents.send('edit:history', action);
   });
 
+  openApp(win);
+}
+
+/** Loads the app into `win`; `query` becomes its search params (the print page reads them). */
+function openApp(win, query) {
   if (app.isPackaged || process.env.READER_PROD) {
-    win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
-  } else {
-    win.loadURL(DEV_URL);
+    return win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), { query });
   }
+  return win.loadURL(query ? `${DEV_URL}/?${new URLSearchParams(query)}` : DEV_URL);
 }
 
 app.whenReady().then(async () => {

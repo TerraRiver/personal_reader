@@ -2476,3 +2476,127 @@ html:not([data-platform='mac']) .settings-titlebar {
 .toast.toast-fixed {
   position: fixed;
 }
+
+/* ==========================================================================
+   Translation PDF — the page a hidden window prints (PrintTranslation.tsx)
+   ========================================================================== */
+
+html.printing,
+html.printing body,
+html.printing #root {
+  height: auto;
+  overflow: visible;
+}
+
+.pdoc {
+  font-family: 'Times New Roman', Times, 'Songti SC', STSong, SimSun, serif;
+  font-size: var(--pdoc-font);
+  line-height: 1.75;
+  text-align: justify;
+}
+.pdoc p {
+  margin: 0;
+}
+.pdoc > * + * {
+  margin-top: 0.6em;
+}
+.pdoc h1,
+.pdoc h2,
+.pdoc h3 {
+  margin: 1.6em 0 0.5em;
+  font-family: var(--font);
+  font-weight: 700;
+  line-height: 1.35;
+  text-align: left;
+  break-after: avoid;
+}
+.pdoc > :first-child {
+  margin-top: 0;
+}
+.pdoc h1 {
+  font-size: 1.5em;
+}
+.pdoc h2 {
+  font-size: 1.25em;
+}
+.pdoc h3 {
+  font-size: 1.08em;
+}
+.pdoc h1 p,
+.pdoc h2 p,
+.pdoc h3 p {
+  display: inline;
+}
+.pdoc sup {
+  line-height: 0;
+  font-size: 0.7em;
+}
+.pdoc ul {
+  margin: 0;
+  padding-left: 1.6em;
+}
+.pdoc-para p,
+.pdoc-note p {
+  text-indent: 2em;
+}
+.pdoc-quote {
+  padding-left: 2em;
+}
+.pdoc-note,
+.pdoc-ref,
+.pdoc-caption {
+  font-size: 0.85em;
+  line-height: 1.6;
+}
+.pdoc-ref {
+  padding-left: 2em;
+  text-indent: -2em;
+  text-align: left;
+}
+/* The original under its translation, in a bilingual PDF. */
+.pdoc-en {
+  margin-top: 0.25em;
+  font-size: 0.9em;
+  line-height: 1.55;
+  color: #6b6b6b;
+}
+.pdoc-en p {
+  text-indent: 0;
+}
+.pdoc-en-heading {
+  margin-top: -0.3em;
+}
+.pdoc-figure {
+  margin-left: 0;
+  margin-right: 0;
+  text-align: center;
+  break-inside: avoid;
+}
+.pdoc-figure img {
+  max-width: 100%;
+  max-height: var(--pdoc-image);
+}
+.pdoc-figure .pdoc-caption {
+  margin: 0.3em 0;
+  text-align: left;
+}
+.pdoc-table table {
+  margin: 0 auto;
+  border-collapse: collapse;
+  font-size: 0.8em;
+  line-height: 1.45;
+  text-align: left;
+}
+.pdoc-table td,
+.pdoc-table th {
+  border: 0.5pt solid #999;
+  padding: 2px 5px;
+  vertical-align: top;
+}
+.pdoc-missing {
+  color: #888;
+  font-size: 0.85em;
+}
+.pdoc .math {
+  overflow: hidden;
+}

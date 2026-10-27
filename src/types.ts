@@ -270,6 +270,15 @@ export interface Api {
   exportPdf(bookId: string): Promise<ExportResult>;
   /** Asks where to save, then writes a zip of the parse as .md with its images. */
   exportMd(bookId: string): Promise<ExportResult>;
+  /**
+   * Asks where to save, then writes the translation laid out at the original's page size;
+   * untranslated parts stay in the original. `bilingual` adds the original under each piece.
+   */
+  exportTranslationPdf(bookId: string, bilingual: boolean): Promise<ExportResult>;
+  /** A figure of the parse (`img` of a block); null when it's missing. */
+  parsedImage(bookId: string, name: string): Promise<Uint8Array | null>;
+  /** The print page tells the main process it's laid out (null) or why it can't be (a message). */
+  printReady(error: string | null): void;
   onExportProgress(fn: (bookId: string, progress: { done: number; total: number }) => void): () => void;
   /** Translates `range` ([from, to] pages) too; without one, carries on with the ranges asked for before. */
   startTranslation(bookId: string, range?: [number, number]): Promise<void>;

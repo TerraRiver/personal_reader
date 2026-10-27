@@ -35,7 +35,8 @@ const SHOW_ORIGINAL_KEY = 'reader.translationOriginal';
 // ---------------------------------------------------------------------------
 // Text: Markdown per piece, with ^12^ for footnote markers and $…$ for formulas.
 
-const MATH = /\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$/g;
+// One pass, so a marker can't be matched across the ^ inside formulas ($x^2$ … $y^{2}$).
+const TOKENS = /\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$|\^([^^\s][^^]*?)\^/g;
 const MARK = '\u0001';
 
 /** Formulas and markers go into inline code first, so Markdown leaves their insides alone. */
@@ -43,11 +44,12 @@ function prepare(text: string) {
   const code = (s: string) => (s.includes('`') ? `\`\` ${s} \`\`` : `\`${s}\``);
   return text
     .replace(/<sup>\s*([^<]*?)\s*<\/sup>/g, '^$1^')
-    .replace(MATH, (_, display, inline) => code(`${MARK}${display != null ? 'M' : 'm'}${display ?? inline}`))
-    .replace(/\^([^^\s][^^]*?)\^/g, (_, s) => code(`${MARK}s${s}`));
+    .replace(TOKENS, (_, display, inline, sup) =>
+      code(sup != null ? `${MARK}s${sup}` : `${MARK}${display != null ? 'M' : 'm'}${display ?? inline}`),
+    );
 }
 
-const tex = (src: string, displayMode: boolean) =>
+export const tex = (src: string, displayMode: boolean) =>
   katex.renderToString(src, { displayMode, throwOnError: false, strict: 'ignore' });
 
 const MD_COMPONENTS = {
@@ -62,7 +64,7 @@ const MD_COMPONENTS = {
   a: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
 };
 
-const Text = memo(function Text({ text }: { text: string }) {
+export const Text = memo(function Text({ text }: { text: string }) {
   return (
     <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
       {prepare(text)}
@@ -72,7 +74,7 @@ const Text = memo(function Text({ text }: { text: string }) {
 
 // Tables arrive as HTML from MinerU and the model; only plain table markup is kept.
 const TABLE_TAGS = new Set(['TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'TD', 'TH', 'SUP', 'SUB', 'B', 'I', 'EM', 'STRONG', 'BR']);
-function safeTable(html: string) {
+export function safeTable(html: string) {
   const t = document.createElement('template');
   t.innerHTML = html;
   const walk = (node: Element | DocumentFragment) => {
@@ -88,7 +90,7 @@ function safeTable(html: string) {
 
 // ---------------------------------------------------------------------------
 
-const shown = (p?: TranslatedPiece) => p?.edit ?? p?.mt;
+export const shown = (p?: TranslatedPiece) => p?.edit ?? p?.mt;
 
 const inRanges = (ranges: [number, number][], page: number) => ranges.some(([from, to]) => page >= from && page <= to);
 
